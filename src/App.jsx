@@ -1,4 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { auth } from "./firebase";
+import {
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  sendEmailVerification,
+  signInWithEmailAndPassword,
+  signOut,
+} from "firebase/auth";
 import {
   Bell,
   Gamepad2,
@@ -29,7 +37,8 @@ import {
 } from "lucide-react";
 
 const STORAGE_KEY = "adarsh_gamerz_static_admin_v1";
-const SESSION_KEY = "adarsh_admin_login";
+const DB_NAME = "adarsh_gamerz_db";
+const STORE_NAME = "site_store";
 
 function createId() {
   if (typeof globalThis !== "undefined" && globalThis.crypto?.randomUUID) {
@@ -60,7 +69,6 @@ function createDefaultData() {
     logoUrl: "",
     bannerUrl: "",
     adminEmail: "vishu011101@gmail.com",
-    adminPassword: "123456",
     notifications: [
       {
         id: createId(),
@@ -161,7 +169,9 @@ function normalizeData(raw) {
   if (!raw || typeof raw !== "object") {
     return {
       ...defaults,
-      videos: defaults.videos.map((video) => normalizeVideo(video, defaults.videos[0])),
+      videos: defaults.videos.map((video, index) =>
+        normalizeVideo(video, defaults.videos[index] || defaults.videos[0])
+      ),
     };
   }
 
@@ -185,37 +195,18 @@ function normalizeData(raw) {
 }
 
 function runSelfTests() {
-  const base = createDefaultData();
   const normalized = normalizeData({ siteName: "TEST", videos: [], notifications: [], brands: [] });
-  const migrated = normalizeData({
-    videos: [{ id: "a", title: "Old", thumbnail: "thumb-1" }],
-  });
-
-  if (!base.siteName || !Array.isArray(base.videos) || !Array.isArray(base.notifications)) {
-    throw new Error("Default data shape is invalid");
-  }
+  const migrated = normalizeData({ videos: [{ id: "a", title: "Old", thumbnail: "thumb-1" }] });
 
   if (normalized.siteName !== "TEST") {
     throw new Error("normalizeData should preserve provided scalar fields");
   }
-
-  if (normalized.videos.length === 0 || normalized.notifications.length === 0 || normalized.brands.length === 0) {
-    throw new Error("normalizeData should restore empty collections with defaults");
+  if (normalized.videos.length < 3) {
+    throw new Error("There should always be at least 3 video cards");
   }
-
-  const ids = new Set(normalized.videos.map((item) => item.id));
-  if (ids.size !== normalized.videos.length) {
-    throw new Error("Video IDs should be unique");
-  }
-
   if (!Array.isArray(migrated.videos[0].thumbnails) || migrated.videos[0].thumbnails.length !== 3) {
     throw new Error("Video thumbnails should always have 3 slots");
   }
-
-  if (migrated.videos.length < 3) {
-    throw new Error("There should always be at least 3 video cards");
-  }
-
   if (migrated.videos[0].thumbnails[0] !== "thumb-1") {
     throw new Error("Legacy thumbnail should migrate into first slot");
   }
@@ -223,33 +214,111 @@ function runSelfTests() {
 
 runSelfTests();
 
-function useSiteData() {
-  const [data, setData] = useState(() => {
-    if (!isBrowser()) {
-      return createDefaultData();
-    }
-
-    try {
-      const saved = window.localStorage.getItem(STORAGE_KEY);
-      if (!saved) {
-        return createDefaultData();
-      }
-      return normalizeData(JSON.parse(saved));
-    } catch {
-      return createDefaultData();
-    }
-  });
-
-  useEffect(() => {
-    if (!isBrowser()) {
+function openDatabase() {
+  return new Promise((resolve, reject) => {
+    if (!isBrowser() || !window.indexedDB) {
+      resolve(null);
       return;
     }
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-    } catch {}
-  }, [data]);
 
-  return [data, setData];
+    const request = window.indexedDB.open(DB_NAME, 1);
+
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME);
+      }
+    };
+
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Failed to open IndexedDB"));
+  });
+}
+
+async function readStoredData() {
+  if (!isBrowser()) {
+    return createDefaultData();
+  }
+
+  try {
+    const db = await openDatabase();
+    if (db) {
+      const value = await new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, "readonly");
+        const store = tx.objectStore(STORE_NAME);
+        const request = store.get(STORAGE_KEY);
+        request.onsuccess = () => resolve(request.result || null);
+        request.onerror = () => reject(request.error || new Error("Failed to read IndexedDB"));
+      });
+      db.close();
+      if (value) {
+        return normalizeData(value);
+      }
+    }
+  } catch {}
+
+  try {
+    const saved = window.localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      return normalizeData(JSON.parse(saved));
+    }
+  } catch {}
+
+  return createDefaultData();
+}
+
+async function writeStoredData(data) {
+  if (!isBrowser()) {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch {}
+
+  try {
+    const db = await openDatabase();
+    if (db) {
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(STORE_NAME, "readwrite");
+        const store = tx.objectStore(STORE_NAME);
+        const request = store.put(data, STORAGE_KEY);
+        request.onsuccess = () => resolve(true);
+        request.onerror = () => reject(request.error || new Error("Failed to write IndexedDB"));
+      });
+      db.close();
+    }
+  } catch {}
+}
+
+function useSiteData() {
+  const [data, setData] = useState(() => createDefaultData());
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+
+    readStoredData().then((stored) => {
+      if (!active) {
+        return;
+      }
+      setData(stored);
+      setLoaded(true);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!loaded) {
+      return;
+    }
+    writeStoredData(data);
+  }, [data, loaded]);
+
+  return [data, setData, loaded];
 }
 
 function SectionTitle({ emoji, title, glow = "green" }) {
@@ -296,25 +365,13 @@ function BrandIcon({ type }) {
 
 function SocialIcon({ kind }) {
   if (kind === "youtube") {
-    return (
-      <span className="flex h-5 w-5 items-center justify-center rounded-md bg-red-500/20 text-[10px] font-black text-red-400">
-        YT
-      </span>
-    );
+    return <span className="flex h-5 w-5 items-center justify-center rounded-md bg-red-500/20 text-[10px] font-black text-red-400">YT</span>;
   }
   if (kind === "instagram") {
-    return (
-      <span className="flex h-5 w-5 items-center justify-center rounded-md bg-pink-500/20 text-[10px] font-black text-pink-400">
-        IG
-      </span>
-    );
+    return <span className="flex h-5 w-5 items-center justify-center rounded-md bg-pink-500/20 text-[10px] font-black text-pink-400">IG</span>;
   }
   if (kind === "facebook") {
-    return (
-      <span className="flex h-5 w-5 items-center justify-center rounded-md bg-blue-500/20 text-[10px] font-black text-blue-400">
-        FB
-      </span>
-    );
+    return <span className="flex h-5 w-5 items-center justify-center rounded-md bg-blue-500/20 text-[10px] font-black text-blue-400">FB</span>;
   }
   if (kind === "telegram") {
     return <Send className="h-5 w-5 text-cyan-400" />;
@@ -355,8 +412,8 @@ function Textarea({ label, className = "", ...props }) {
   );
 }
 
-export default function App() {
-  const [data, setData] = useSiteData();
+function App() {
+  const [data, setData, dataLoaded] = useSiteData();
   const [mobileMenu, setMobileMenu] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminPage, setAdminPage] = useState("settings");
@@ -367,21 +424,28 @@ export default function App() {
   const [signupForm, setSignupForm] = useState({ email: "", password: "" });
 
   useEffect(() => {
-    if (!isBrowser()) return;
-    try {
-      const saved = window.sessionStorage.getItem(SESSION_KEY);
-      if (saved === "yes") setLoggedIn(true);
-    } catch {}
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setLoggedIn(Boolean(user && user.emailVerified));
+      if (user && user.emailVerified) {
+        setAuthMode("login");
+      }
+    });
+
+    return () => unsubscribe();
   }, []);
 
   useEffect(() => {
-    if (!toast || !isBrowser()) return undefined;
+    if (!toast) {
+      return undefined;
+    }
     const timer = window.setTimeout(() => setToast(""), 2400);
     return () => window.clearTimeout(timer);
   }, [toast]);
 
   useEffect(() => {
-    if (!adminOpen) setMobileMenu(false);
+    if (!adminOpen) {
+      setMobileMenu(false);
+    }
   }, [adminOpen]);
 
   const navItems = useMemo(
@@ -407,7 +471,9 @@ export default function App() {
   );
 
   const scrollToId = (id) => {
-    if (!isBrowser()) return;
+    if (!isBrowser()) {
+      return;
+    }
     window.document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
     setMobileMenu(false);
   };
@@ -422,46 +488,71 @@ export default function App() {
     setMobileMenu(false);
   };
 
-  const closeAdmin = () => setAdminOpen(false);
-
-  const logout = () => {
-    setLoggedIn(false);
-    if (isBrowser()) {
-      try {
-        window.sessionStorage.removeItem(SESSION_KEY);
-      } catch {}
-    }
-    setToast("Logged out");
+  const closeAdmin = () => {
+    setAdminOpen(false);
   };
 
-  const handleLogin = () => {
+  const logout = async () => {
+    try {
+      await signOut(auth);
+      setLoggedIn(false);
+      setToast("Logged out");
+    } catch {
+      setToast("Logout failed");
+    }
+  };
+
+  const handleLogin = async () => {
     const email = loginForm.email.trim();
     const password = loginForm.password;
-    if (email === data.adminEmail.trim() && password === data.adminPassword) {
-      setLoggedIn(true);
-      if (isBrowser()) {
-        try {
-          window.sessionStorage.setItem(SESSION_KEY, "yes");
-        } catch {}
-      }
-      setAdminPage("settings");
-      setToast("Admin login successful");
-      return;
-    }
-    setToast("Wrong email or password");
-  };
 
-  const handleSignup = () => {
-    const email = signupForm.email.trim();
-    const password = signupForm.password;
     if (!email || !password) {
       setToast("Enter email and password");
       return;
     }
-    saveData((prev) => ({ ...prev, adminEmail: email, adminPassword: password }), "New admin account created");
-    setAuthMode("login");
-    setLoginForm({ email, password });
-    setSignupForm({ email: "", password: "" });
+
+    try {
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+
+      if (!userCredential.user.emailVerified) {
+        setToast("Please verify your email first");
+        return;
+      }
+
+      setLoggedIn(true);
+      setAdminPage("settings");
+      setToast("Admin login successful");
+    } catch (error) {
+      setToast(error?.message || "Wrong email or password");
+    }
+  };
+
+  const handleSignup = async () => {
+    const email = signupForm.email.trim();
+    const password = signupForm.password;
+
+    if (!email || !password) {
+      setToast("Enter email and password");
+      return;
+    }
+
+    try {
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      await sendEmailVerification(userCredential.user);
+      saveData(
+        (prev) => ({
+          ...prev,
+          adminEmail: email,
+        }),
+        "Verification email sent"
+      );
+      setAuthMode("login");
+      setLoginForm({ email, password: "" });
+      setSignupForm({ email: "", password: "" });
+      await signOut(auth);
+    } catch (error) {
+      setToast(error?.message || "Signup failed");
+    }
   };
 
   const updateVideo = (id, patch) => {
@@ -478,7 +569,9 @@ export default function App() {
     saveData(
       (prev) => ({
         ...prev,
-        notifications: prev.notifications.map((item) => (item.id === id ? { ...item, ...patch } : item)),
+        notifications: prev.notifications.map((item) =>
+          item.id === id ? { ...item, ...patch } : item
+        ),
       }),
       "Notification saved"
     );
@@ -495,7 +588,9 @@ export default function App() {
   };
 
   const handleImageUpload = async (file, onSuccessMessage, applyUpdate) => {
-    if (!file) return;
+    if (!file) {
+      return;
+    }
     try {
       const base64 = await fileToBase64(file);
       if (!base64) {
@@ -507,6 +602,20 @@ export default function App() {
       setToast("Image upload failed");
     }
   };
+
+  const clearStoredImage = (key, message) => {
+    saveData((prev) => ({ ...prev, [key]: "" }), message);
+  };
+
+  if (!dataLoaded) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#02060c] text-white">
+        <div className="rounded-2xl border border-lime-400/30 bg-slate-950/80 px-6 py-4 text-xl font-bold text-lime-400">
+          Loading site data...
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#02060c] text-white selection:bg-lime-400 selection:text-black">
@@ -599,6 +708,7 @@ export default function App() {
                 </button>
               </div>
             </div>
+
             <div className="mx-auto mt-14 grid max-w-3xl gap-4 md:grid-cols-3">
               <StatCard icon={Users} value={data.subscribers} label="Subscribers" />
               <StatCard icon={Video} value={data.totalVideos} label="Videos" />
@@ -618,7 +728,7 @@ export default function App() {
                 {data.videos.map((video) => (
                   <a key={video.id} href={video.videoUrl || "#"} target="_blank" rel="noreferrer" className="group overflow-hidden rounded-2xl border border-slate-800 bg-slate-950/70 transition hover:-translate-y-1 hover:border-lime-400/50 hover:shadow-[0_0_30px_rgba(57,255,20,.12)]">
                     <div className="relative aspect-video overflow-hidden bg-slate-900">
-                      {(video.thumbnails?.find(Boolean) || video.thumbnail) ? (
+                      {video.thumbnails?.find(Boolean) || video.thumbnail ? (
                         <img src={video.thumbnails?.find(Boolean) || video.thumbnail} alt={video.title || "Video thumbnail"} className="h-full w-full object-cover transition duration-300 group-hover:scale-105" />
                       ) : (
                         <div className="flex h-full items-center justify-center text-slate-500">
@@ -829,7 +939,6 @@ export default function App() {
                           <Input label="Total Videos" value={data.totalVideos} onChange={(event) => saveData((prev) => ({ ...prev, totalVideos: event.target.value }))} />
                           <Input label="Total Views" value={data.totalViews} onChange={(event) => saveData((prev) => ({ ...prev, totalViews: event.target.value }))} />
                           <Input label="Admin Email" value={data.adminEmail} onChange={(event) => saveData((prev) => ({ ...prev, adminEmail: event.target.value }), "Admin email updated")} />
-                          <Input label="Admin Password" type="password" value={data.adminPassword} onChange={(event) => saveData((prev) => ({ ...prev, adminPassword: event.target.value }), "Admin password updated")} />
                         </div>
                         <div className="mt-4 grid gap-4">
                           <Textarea label="Tagline / Bio" value={data.tagline} onChange={(event) => saveData((prev) => ({ ...prev, tagline: event.target.value }))} />
@@ -839,14 +948,32 @@ export default function App() {
 
                         <div className="mt-6 grid gap-6 md:grid-cols-2">
                           <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4">
-                            <div className="mb-3 text-xl font-bold text-white">Logo Upload</div>
+                            <div className="mb-3 flex items-center justify-between gap-3">
+                              <div className="text-xl font-bold text-white">Logo Upload</div>
+                              <button type="button" onClick={() => clearStoredImage("logoUrl", "Logo deleted")} className="rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-red-300 hover:bg-red-500/20">
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </div>
                             <input type="file" accept="image/*" onChange={(event) => handleImageUpload(event.target.files?.[0], "Logo updated", (base64) => (prev) => ({ ...prev, logoUrl: base64 }))} className="block w-full text-sm text-slate-400" />
-                            {data.logoUrl ? <img src={data.logoUrl} alt="logo preview" className="mt-4 h-20 w-20 rounded-xl object-cover" /> : null}
+                            {data.logoUrl ? (
+                              <img src={data.logoUrl} alt="logo preview" className="mt-4 h-20 w-20 rounded-xl object-cover" />
+                            ) : (
+                              <div className="mt-4 flex h-20 w-20 items-center justify-center rounded-xl border border-dashed border-slate-700 text-xs text-slate-500">No logo</div>
+                            )}
                           </div>
                           <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4">
-                            <div className="mb-3 text-xl font-bold text-white">Banner Upload</div>
+                            <div className="mb-3 flex items-center justify-between gap-3">
+                              <div className="text-xl font-bold text-white">Banner Upload</div>
+                              <button type="button" onClick={() => clearStoredImage("bannerUrl", "Banner deleted")} className="rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-red-300 hover:bg-red-500/20">
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </div>
                             <input type="file" accept="image/*" onChange={(event) => handleImageUpload(event.target.files?.[0], "Banner updated", (base64) => (prev) => ({ ...prev, bannerUrl: base64 }))} className="block w-full text-sm text-slate-400" />
-                            {data.bannerUrl ? <img src={data.bannerUrl} alt="banner preview" className="mt-4 h-24 w-full rounded-xl object-cover" /> : null}
+                            {data.bannerUrl ? (
+                              <img src={data.bannerUrl} alt="banner preview" className="mt-4 h-24 w-full rounded-xl object-cover" />
+                            ) : (
+                              <div className="mt-4 flex h-24 w-full items-center justify-center rounded-xl border border-dashed border-slate-700 text-sm text-slate-500">No banner</div>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -898,13 +1025,19 @@ export default function App() {
                                         <input type="file" accept="image/*" onChange={(event) => handleImageUpload(event.target.files?.[0], `Thumbnail ${thumbIndex + 1} uploaded`, (base64) => (prev) => ({
                                           ...prev,
                                           videos: prev.videos.map((item) => {
-                                            if (item.id !== video.id) return item;
+                                            if (item.id !== video.id) {
+                                              return item;
+                                            }
                                             const nextThumbs = [...(item.thumbnails || ["", "", ""]), "", ""].slice(0, 3);
                                             nextThumbs[thumbIndex] = base64;
                                             return { ...item, thumbnails: nextThumbs, thumbnail: nextThumbs.find(Boolean) || "" };
                                           }),
                                         }))} className="block w-full text-sm text-slate-400" />
-                                        {thumbValue ? <img src={thumbValue} alt={`thumb-${thumbIndex + 1}`} className="mt-3 aspect-video w-full rounded-xl object-cover" /> : <div className="mt-3 flex aspect-video items-center justify-center rounded-xl border border-dashed border-slate-700 text-sm text-slate-500">No thumbnail</div>}
+                                        {thumbValue ? (
+                                          <img src={thumbValue} alt={`thumb-${thumbIndex + 1}`} className="mt-3 aspect-video w-full rounded-xl object-cover" />
+                                        ) : (
+                                          <div className="mt-3 flex aspect-video items-center justify-center rounded-xl border border-dashed border-slate-700 text-sm text-slate-500">No thumbnail</div>
+                                        )}
                                       </div>
                                     );
                                   })}
@@ -996,8 +1129,7 @@ export default function App() {
                           <Input label="Telegram Link" value={data.telegram} onChange={(event) => saveData((prev) => ({ ...prev, telegram: event.target.value }), "Contact updated")} />
                         </div>
                         <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/80 p-5 text-slate-400">
-                          Tip: yaha jo links aur details bharoge woh website me instantly update ho jayenge.
-                          Static website hone ke baad bhi yeh demo admin panel localStorage me data save karta hai.
+                          Tip: yaha jo links aur details bharoge woh website me instantly update ho jayenge. Static website hone ke baad bhi yeh demo admin panel IndexedDB aur localStorage me data save karta hai.
                         </div>
                       </div>
                     )}
@@ -1010,8 +1142,12 @@ export default function App() {
       )}
 
       {toast ? (
-        <div className="fixed bottom-24 left-1/2 z-[60] -translate-x-1/2 rounded-2xl border border-slate-700 bg-black/90 px-5 py-3 text-lg font-semibold text-white shadow-[0_0_25px_rgba(57,255,20,.14)]">{toast}</div>
+        <div className="fixed bottom-24 left-1/2 z-[60] -translate-x-1/2 rounded-2xl border border-slate-700 bg-black/90 px-5 py-3 text-lg font-semibold text-white shadow-[0_0_25px_rgba(57,255,20,.14)]">
+          {toast}
+        </div>
       ) : null}
     </div>
   );
 }
+
+export default App;
