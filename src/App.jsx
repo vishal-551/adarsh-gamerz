@@ -39,6 +39,8 @@ import {
 const STORAGE_KEY = "adarsh_gamerz_static_admin_v1";
 const DB_NAME = "adarsh_gamerz_db";
 const STORE_NAME = "site_store";
+const ALLOWED_ADMIN_EMAIL = "vishaldas571725@gmail.com";
+const BRAND_FORM_EMAIL = "vishaldas571725@gmail.com";
 
 function createId() {
   if (typeof globalThis !== "undefined" && globalThis.crypto?.randomUUID) {
@@ -422,6 +424,7 @@ function App() {
   const [toast, setToast] = useState("");
   const [loginForm, setLoginForm] = useState({ email: "", password: "" });
   const [signupForm, setSignupForm] = useState({ email: "", password: "" });
+  const [brandForm, setBrandForm] = useState({ name: "", email: "", brand: "", message: "" });
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
@@ -503,8 +506,13 @@ function App() {
   };
 
   const handleLogin = async () => {
-    const email = loginForm.email.trim();
+    const email = loginForm.email.trim().toLowerCase();
     const password = loginForm.password;
+
+    if (email !== ALLOWED_ADMIN_EMAIL.toLowerCase()) {
+      setToast("Only your admin email is allowed");
+      return;
+    }
 
     if (!email || !password) {
       setToast("Enter email and password");
@@ -528,8 +536,13 @@ function App() {
   };
 
   const handleSignup = async () => {
-    const email = signupForm.email.trim();
+    const email = signupForm.email.trim().toLowerCase();
     const password = signupForm.password;
+
+    if (email !== ALLOWED_ADMIN_EMAIL.toLowerCase()) {
+      setToast("Only your admin email can create admin account");
+      return;
+    }
 
     if (!email || !password) {
       setToast("Enter email and password");
@@ -605,6 +618,10 @@ function App() {
 
   const clearStoredImage = (key, message) => {
     saveData((prev) => ({ ...prev, [key]: "" }), message);
+  };
+
+  const handleBrandFormChange = (field, value) => {
+    setBrandForm((prev) => ({ ...prev, [field]: value }));
   };
 
   if (!dataLoaded) {
@@ -798,6 +815,58 @@ function App() {
               <a href={`mailto:${data.brandContactEmail}`} className="inline-flex items-center gap-3 rounded-xl bg-lime-500 px-8 py-4 text-xl font-black uppercase tracking-wide text-black shadow-[0_0_30px_rgba(57,255,20,.25)]" style={{ fontFamily: "Orbitron, sans-serif" }}>
                 <Mail className="h-6 w-6" /> Contact For Brand Deals
               </a>
+            </div>
+
+            <div className="mx-auto mt-12 max-w-4xl rounded-3xl border border-slate-800 bg-slate-950/70 p-6 md:p-8">
+              <h3 className="mb-6 text-center text-3xl font-bold text-white">Brand Deal Contact Form</h3>
+              <form action={`https://formsubmit.co/${BRAND_FORM_EMAIL}`} method="POST" className="grid gap-4 md:grid-cols-2">
+                <input type="hidden" name="_subject" value="New Brand Deal Inquiry" />
+                <input type="hidden" name="_captcha" value="false" />
+                <input type="hidden" name="_template" value="table" />
+                <input type="hidden" name="_next" value={isBrowser() ? window.location.href : ""} />
+
+                <Input
+                  label="Your Name"
+                  name="name"
+                  value={brandForm.name}
+                  onChange={(event) => handleBrandFormChange("name", event.target.value)}
+                  placeholder="Enter your name"
+                />
+                <Input
+                  label="Your Email"
+                  type="email"
+                  name="email"
+                  value={brandForm.email}
+                  onChange={(event) => handleBrandFormChange("email", event.target.value)}
+                  placeholder="Enter your email"
+                />
+                <Input
+                  label="Brand Name"
+                  name="brand"
+                  value={brandForm.brand}
+                  onChange={(event) => handleBrandFormChange("brand", event.target.value)}
+                  placeholder="Enter brand/company name"
+                />
+                <Input
+                  label="Contact Number"
+                  name="phone"
+                  placeholder="Enter contact number"
+                />
+                <div className="md:col-span-2">
+                  <Textarea
+                    label="Message"
+                    name="message"
+                    value={brandForm.message}
+                    onChange={(event) => handleBrandFormChange("message", event.target.value)}
+                    placeholder="Tell me about your brand deal or collaboration"
+                  />
+                </div>
+                <div className="md:col-span-2 text-center">
+                  <button type="submit" className="inline-flex items-center gap-3 rounded-xl bg-cyan-500 px-8 py-4 text-lg font-black uppercase tracking-wide text-black shadow-[0_0_30px_rgba(34,211,238,.2)] hover:scale-[1.02]" style={{ fontFamily: "Orbitron, sans-serif" }}>
+                    <Send className="h-5 w-5" /> Send Brand Inquiry
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         </section>
