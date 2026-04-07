@@ -1,39 +1,68 @@
-import { supabase } from "../supabase";
+import { supabase } from "./supabaseClient";
+
+const SITE_CONTENT_ID = "main-site-content";
 
 export async function loadSiteData() {
   const { data, error } = await supabase
     .from("site_content")
     .select("data")
-    .eq("id", "main")
-    .single();
+    .eq("id", SITE_CONTENT_ID)
+    .maybeSingle();
 
-  if (error) throw error;
-  return data?.data || null;
+  console.log("loadSiteData result:", { data, error });
+
+  if (error) {
+    console.error("loadSiteData error:", error);
+    throw error;
+  }
+
+  return data?.data ?? null;
 }
 
 export async function saveSiteData(siteData) {
-  const { error } = await supabase.from("site_content").upsert(
-    {
-      id: "main",
-      data: siteData,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "id" }
-  );
+  const payload = {
+    id: SITE_CONTENT_ID,
+    data: siteData,
+    updated_at: new Date().toISOString(),
+  };
 
-  if (error) throw error;
+  console.log("saveSiteData payload:", payload);
+
+  const { data, error } = await supabase
+    .from("site_content")
+    .upsert(payload)
+    .select()
+    .single();
+
+  console.log("saveSiteData result:", { data, error });
+
+  if (error) {
+    console.error("saveSiteData error:", error);
+    throw error;
+  }
+
+  return data;
 }
 
-export async function submitBrandEnquiry(payload) {
-  const { error } = await supabase.from("brand_enquiries").insert([
-    {
-      name: payload.name,
-      email: payload.email,
-      brand: payload.brand,
-      phone: payload.phone,
-      message: payload.message,
-    },
-  ]);
+export async function submitBrandEnquiry(formData) {
+  const { data, error } = await supabase
+    .from("brand_enquiries")
+    .insert({
+      name: formData.name,
+      email: formData.email,
+      brand: formData.brand,
+      phone: formData.phone,
+      message: formData.message,
+    })
+    .select()
+    .single();
 
-  if (error) throw error;
+  console.log("submitBrandEnquiry result:", { data, error });
+
+  if (error) {
+    console.error("submitBrandEnquiry error:", error);
+    throw error;
+  }
+
+  return data;
 }
