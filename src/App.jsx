@@ -1,6 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { auth } from "./firebase";
 import {
+  loadSiteData,
+  saveSiteData,
+  submitBrandEnquiry,
+} from "./services/siteService";
+import { uploadImage } from "./services/uploadService";
+import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
   sendEmailVerification,
@@ -36,11 +42,7 @@ import {
   MessageCircle,
 } from "lucide-react";
 
-const STORAGE_KEY = "adarsh_gamerz_static_admin_v1";
-const DB_NAME = "adarsh_gamerz_db";
-const STORE_NAME = "site_store";
 const ALLOWED_ADMIN_EMAIL = "vishaldas571725@gmail.com";
-const BRAND_FORM_EMAIL = "vishaldas571725@gmail.com";
 
 function createId() {
   if (typeof globalThis !== "undefined" && globalThis.crypto?.randomUUID) {
@@ -52,14 +54,15 @@ function createId() {
 function createDefaultData() {
   return {
     siteName: "ADARSH GAMERZ",
-    tagline: "Level Up Your Gaming Experience — Watch, Upload, Connect with Brands & Dominate!",
+    tagline:
+      "Level Up Your Gaming Experience — Watch, Upload, Connect with Brands & Dominate!",
     logoText: "ADARSH GAMERZ",
     heroTitle1: "ADARSH",
     heroTitle2: "GAMERZ",
     heroSubtitle:
       "🎮 Level Up Your Gaming Experience — Watch, Upload, Connect with Brands & Dominate!",
     youtubeLink: "https://youtube.com/@yourChannel",
-    brandContactEmail: "brand@adarshgamerz.com",
+    brandContactEmail: "vishaldas571725@gmail.com",
     contactEmail: "adarshgamerz@example.com",
     contactPhone: "+91 90000 00000",
     instagram: "https://instagram.com/",
@@ -70,7 +73,7 @@ function createDefaultData() {
     totalViews: "5M+",
     logoUrl: "",
     bannerUrl: "",
-    adminEmail: "vishu011101@gmail.com",
+    adminEmail: "vishaldas571725@gmail.com",
     notifications: [
       {
         id: createId(),
@@ -136,10 +139,6 @@ function createDefaultData() {
   };
 }
 
-function isBrowser() {
-  return typeof window !== "undefined";
-}
-
 function sanitizeList(list, fallbackFactory) {
   if (!Array.isArray(list) || list.length === 0) {
     return fallbackFactory();
@@ -154,8 +153,8 @@ function normalizeVideo(video, fallbackVideo) {
   const thumbnails = Array.isArray(video?.thumbnails)
     ? [...video.thumbnails, "", ""].slice(0, 3)
     : typeof video?.thumbnail === "string"
-      ? [video.thumbnail, "", ""]
-      : fallbackThumbs;
+    ? [video.thumbnail, "", ""]
+    : fallbackThumbs;
 
   return {
     ...fallbackVideo,
@@ -168,6 +167,7 @@ function normalizeVideo(video, fallbackVideo) {
 
 function normalizeData(raw) {
   const defaults = createDefaultData();
+
   if (!raw || typeof raw !== "object") {
     return {
       ...defaults,
@@ -177,13 +177,18 @@ function normalizeData(raw) {
     };
   }
 
-  const safeVideos = Array.isArray(raw.videos) && raw.videos.length > 0 ? raw.videos : defaults.videos;
+  const safeVideos =
+    Array.isArray(raw.videos) && raw.videos.length > 0
+      ? raw.videos
+      : defaults.videos;
+
   const normalizedVideos = safeVideos.map((video, index) =>
     normalizeVideo(video, defaults.videos[index] || defaults.videos[0])
   );
 
   while (normalizedVideos.length < 3) {
-    const fallback = defaults.videos[normalizedVideos.length] || defaults.videos[0];
+    const fallback =
+      defaults.videos[normalizedVideos.length] || defaults.videos[0];
     normalizedVideos.push(normalizeVideo({}, fallback));
   }
 
@@ -196,139 +201,14 @@ function normalizeData(raw) {
   };
 }
 
-function runSelfTests() {
-  const normalized = normalizeData({ siteName: "TEST", videos: [], notifications: [], brands: [] });
-  const migrated = normalizeData({ videos: [{ id: "a", title: "Old", thumbnail: "thumb-1" }] });
-
-  if (normalized.siteName !== "TEST") {
-    throw new Error("normalizeData should preserve provided scalar fields");
-  }
-  if (normalized.videos.length < 3) {
-    throw new Error("There should always be at least 3 video cards");
-  }
-  if (!Array.isArray(migrated.videos[0].thumbnails) || migrated.videos[0].thumbnails.length !== 3) {
-    throw new Error("Video thumbnails should always have 3 slots");
-  }
-  if (migrated.videos[0].thumbnails[0] !== "thumb-1") {
-    throw new Error("Legacy thumbnail should migrate into first slot");
-  }
-}
-
-runSelfTests();
-
-function openDatabase() {
-  return new Promise((resolve, reject) => {
-    if (!isBrowser() || !window.indexedDB) {
-      resolve(null);
-      return;
-    }
-
-    const request = window.indexedDB.open(DB_NAME, 1);
-
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME);
-      }
-    };
-
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error || new Error("Failed to open IndexedDB"));
-  });
-}
-
-async function readStoredData() {
-  if (!isBrowser()) {
-    return createDefaultData();
-  }
-
-  try {
-    const db = await openDatabase();
-    if (db) {
-      const value = await new Promise((resolve, reject) => {
-        const tx = db.transaction(STORE_NAME, "readonly");
-        const store = tx.objectStore(STORE_NAME);
-        const request = store.get(STORAGE_KEY);
-        request.onsuccess = () => resolve(request.result || null);
-        request.onerror = () => reject(request.error || new Error("Failed to read IndexedDB"));
-      });
-      db.close();
-      if (value) {
-        return normalizeData(value);
-      }
-    }
-  } catch {}
-
-  try {
-    const saved = window.localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      return normalizeData(JSON.parse(saved));
-    }
-  } catch {}
-
-  return createDefaultData();
-}
-
-async function writeStoredData(data) {
-  if (!isBrowser()) {
-    return;
-  }
-
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch {}
-
-  try {
-    const db = await openDatabase();
-    if (db) {
-      await new Promise((resolve, reject) => {
-        const tx = db.transaction(STORE_NAME, "readwrite");
-        const store = tx.objectStore(STORE_NAME);
-        const request = store.put(data, STORAGE_KEY);
-        request.onsuccess = () => resolve(true);
-        request.onerror = () => reject(request.error || new Error("Failed to write IndexedDB"));
-      });
-      db.close();
-    }
-  } catch {}
-}
-
-function useSiteData() {
-  const [data, setData] = useState(() => createDefaultData());
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-
-    readStoredData().then((stored) => {
-      if (!active) {
-        return;
-      }
-      setData(stored);
-      setLoaded(true);
-    });
-
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!loaded) {
-      return;
-    }
-    writeStoredData(data);
-  }, [data, loaded]);
-
-  return [data, setData, loaded];
-}
-
 function SectionTitle({ emoji, title, glow = "green" }) {
   return (
     <div className="mb-8 space-y-2 text-center">
       <h2
         className={`text-3xl font-black uppercase tracking-wider md:text-5xl ${
-          glow === "cyan" ? "neon-cyan text-cyan-400" : "neon-green text-lime-400"
+          glow === "cyan"
+            ? "neon-cyan text-cyan-400"
+            : "neon-green text-lime-400"
         }`}
         style={{ fontFamily: "Orbitron, sans-serif" }}
       >
@@ -367,13 +247,25 @@ function BrandIcon({ type }) {
 
 function SocialIcon({ kind }) {
   if (kind === "youtube") {
-    return <span className="flex h-5 w-5 items-center justify-center rounded-md bg-red-500/20 text-[10px] font-black text-red-400">YT</span>;
+    return (
+      <span className="flex h-5 w-5 items-center justify-center rounded-md bg-red-500/20 text-[10px] font-black text-red-400">
+        YT
+      </span>
+    );
   }
   if (kind === "instagram") {
-    return <span className="flex h-5 w-5 items-center justify-center rounded-md bg-pink-500/20 text-[10px] font-black text-pink-400">IG</span>;
+    return (
+      <span className="flex h-5 w-5 items-center justify-center rounded-md bg-pink-500/20 text-[10px] font-black text-pink-400">
+        IG
+      </span>
+    );
   }
   if (kind === "facebook") {
-    return <span className="flex h-5 w-5 items-center justify-center rounded-md bg-blue-500/20 text-[10px] font-black text-blue-400">FB</span>;
+    return (
+      <span className="flex h-5 w-5 items-center justify-center rounded-md bg-blue-500/20 text-[10px] font-black text-blue-400">
+        FB
+      </span>
+    );
   }
   if (kind === "telegram") {
     return <Send className="h-5 w-5 text-cyan-400" />;
@@ -381,19 +273,12 @@ function SocialIcon({ kind }) {
   return <Globe className="h-5 w-5 text-slate-300" />;
 }
 
-function fileToBase64(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
-    reader.onerror = () => reject(new Error("Failed to read file"));
-    reader.readAsDataURL(file);
-  });
-}
-
 function Input({ label, className = "", ...props }) {
   return (
     <label className="block space-y-2">
-      <span className="text-sm font-semibold text-slate-300 md:text-base">{label}</span>
+      <span className="text-sm font-semibold text-slate-300 md:text-base">
+        {label}
+      </span>
       <input
         {...props}
         className={`w-full rounded-xl border border-slate-700 bg-slate-900/90 px-4 py-3 text-white outline-none transition focus:border-lime-400 focus:shadow-[0_0_0_3px_rgba(57,255,20,0.12)] ${className}`}
@@ -405,7 +290,9 @@ function Input({ label, className = "", ...props }) {
 function Textarea({ label, className = "", ...props }) {
   return (
     <label className="block space-y-2">
-      <span className="text-sm font-semibold text-slate-300 md:text-base">{label}</span>
+      <span className="text-sm font-semibold text-slate-300 md:text-base">
+        {label}
+      </span>
       <textarea
         {...props}
         className={`min-h-[110px] w-full rounded-xl border border-slate-700 bg-slate-900/90 px-4 py-3 text-white outline-none transition focus:border-lime-400 focus:shadow-[0_0_0_3px_rgba(57,255,20,0.12)] ${className}`}
@@ -415,23 +302,68 @@ function Textarea({ label, className = "", ...props }) {
 }
 
 function App() {
-  const [data, setData, dataLoaded] = useSiteData();
+  const [data, setData] = useState(createDefaultData());
+  const [dataLoaded, setDataLoaded] = useState(false);
+
   const [mobileMenu, setMobileMenu] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminPage, setAdminPage] = useState("settings");
   const [authMode, setAuthMode] = useState("login");
   const [loggedIn, setLoggedIn] = useState(false);
   const [toast, setToast] = useState("");
+  const [saving, setSaving] = useState(false);
+
   const [loginForm, setLoginForm] = useState({ email: "", password: "" });
   const [signupForm, setSignupForm] = useState({ email: "", password: "" });
-  const [brandForm, setBrandForm] = useState({ name: "", email: "", brand: "", phone: "", message: "" });
+
+  const [brandForm, setBrandForm] = useState({
+    name: "",
+    email: "",
+    brand: "",
+    phone: "",
+    message: "",
+  });
   const [brandFormOpen, setBrandFormOpen] = useState(false);
+  const [submittingBrand, setSubmittingBrand] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+
+    async function fetchData() {
+      try {
+        const remoteData = await loadSiteData();
+        if (!active) return;
+
+        if (remoteData) {
+          setData(normalizeData(remoteData));
+        } else {
+          const defaults = createDefaultData();
+          setData(defaults);
+          await saveSiteData(defaults);
+        }
+      } catch (error) {
+        console.error("Failed to load site data:", error);
+        if (!active) return;
+        setData(createDefaultData());
+      } finally {
+        if (active) setDataLoaded(true);
+      }
+    }
+
+    fetchData();
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setLoggedIn(Boolean(user && user.emailVerified));
       if (user && user.emailVerified) {
+        setLoggedIn(true);
         setAuthMode("login");
+      } else {
+        setLoggedIn(false);
       }
     });
 
@@ -439,9 +371,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!toast) {
-      return undefined;
-    }
+    if (!toast) return;
     const timer = window.setTimeout(() => setToast(""), 2400);
     return () => window.clearTimeout(timer);
   }, [toast]);
@@ -475,16 +405,29 @@ function App() {
   );
 
   const scrollToId = (id) => {
-    if (!isBrowser()) {
-      return;
-    }
-    window.document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.document
+      .getElementById(id)
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
     setMobileMenu(false);
   };
 
-  const saveData = (updater, message = "Settings saved! 🎮") => {
-    setData((prev) => normalizeData(typeof updater === "function" ? updater(prev) : updater));
-    setToast(message);
+  const saveData = async (updater, message = "Settings saved! 🎮") => {
+    try {
+      setSaving(true);
+
+      const nextData = normalizeData(
+        typeof updater === "function" ? updater(data) : updater
+      );
+
+      setData(nextData);
+      await saveSiteData(nextData);
+      setToast(message);
+    } catch (error) {
+      console.error("Save failed:", error);
+      setToast("Save failed");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const openAdmin = () => {
@@ -521,10 +464,15 @@ function App() {
     }
 
     try {
-      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const userCredential = await signInWithEmailAndPassword(
+        auth,
+        email,
+        password
+      );
 
       if (!userCredential.user.emailVerified) {
         setToast("Please verify your email first");
+        await signOut(auth);
         return;
       }
 
@@ -551,15 +499,22 @@ function App() {
     }
 
     try {
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const userCredential = await createUserWithEmailAndPassword(
+        auth,
+        email,
+        password
+      );
+
       await sendEmailVerification(userCredential.user);
-      saveData(
+
+      await saveData(
         (prev) => ({
           ...prev,
           adminEmail: email,
         }),
         "Verification email sent"
       );
+
       setAuthMode("login");
       setLoginForm({ email, password: "" });
       setSignupForm({ email: "", password: "" });
@@ -569,56 +524,38 @@ function App() {
     }
   };
 
-  const updateVideo = (id, patch) => {
-    saveData(
+  const updateVideo = async (id, patch) => {
+    await saveData(
       (prev) => ({
         ...prev,
-        videos: prev.videos.map((video) => (video.id === id ? { ...video, ...patch } : video)),
+        videos: prev.videos.map((video) =>
+          video.id === id ? { ...video, ...patch } : video
+        ),
       }),
       "Video saved"
     );
   };
 
-  const updateNotification = (id, patch) => {
-    saveData(
-      (prev) => ({
-        ...prev,
-        notifications: prev.notifications.map((item) =>
-          item.id === id ? { ...item, ...patch } : item
-        ),
-      }),
-      "Notification saved"
-    );
-  };
+  const handleImageUpload = async (
+    file,
+    onSuccessMessage,
+    applyUpdate,
+    folder
+  ) => {
+    if (!file) return;
 
-  const updateBrand = (id, patch) => {
-    saveData(
-      (prev) => ({
-        ...prev,
-        brands: prev.brands.map((brand) => (brand.id === id ? { ...brand, ...patch } : brand)),
-      }),
-      "Brand card saved"
-    );
-  };
-
-  const handleImageUpload = async (file, onSuccessMessage, applyUpdate) => {
-    if (!file) {
-      return;
-    }
     try {
-      const base64 = await fileToBase64(file);
-      if (!base64) {
-        setToast("Image upload failed");
-        return;
-      }
-      saveData(applyUpdate(base64), onSuccessMessage);
-    } catch {
+      setToast("Uploading image...");
+      const url = await uploadImage(file, folder || "site-assets");
+      await saveData(applyUpdate(url), onSuccessMessage);
+    } catch (error) {
+      console.error("Image upload failed:", error);
       setToast("Image upload failed");
     }
   };
 
-  const clearStoredImage = (key, message) => {
-    saveData((prev) => ({ ...prev, [key]: "" }), message);
+  const clearStoredImage = async (key, message) => {
+    await saveData((prev) => ({ ...prev, [key]: "" }), message);
   };
 
   const handleBrandFormChange = (field, value) => {
@@ -633,12 +570,38 @@ function App() {
     setBrandFormOpen(false);
   };
 
-  const handleBrandSubmit = () => {
-    setToast("Enquiry sent successfully");
-    setBrandForm({ name: "", email: "", brand: "", phone: "", message: "" });
-    window.setTimeout(() => {
-      setBrandFormOpen(false);
-    }, 300);
+  const handleBrandSubmit = async (e) => {
+    e.preventDefault();
+
+    try {
+      setSubmittingBrand(true);
+
+      await submitBrandEnquiry({
+        name: brandForm.name,
+        email: brandForm.email,
+        brand: brandForm.brand,
+        phone: brandForm.phone,
+        message: brandForm.message,
+      });
+
+      setToast("Enquiry sent successfully");
+      setBrandForm({
+        name: "",
+        email: "",
+        brand: "",
+        phone: "",
+        message: "",
+      });
+
+      window.setTimeout(() => {
+        setBrandFormOpen(false);
+      }, 300);
+    } catch (error) {
+      console.error("Brand enquiry failed:", error);
+      setToast("Failed to send enquiry");
+    } finally {
+      setSubmittingBrand(false);
+    }
   };
 
   if (!dataLoaded) {
@@ -667,31 +630,55 @@ function App() {
 
       <header className="sticky top-0 z-30 border-b border-slate-800/80 bg-black/70 backdrop-blur-md">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 md:px-6">
-          <button type="button" onClick={() => scrollToId("home")} className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => scrollToId("home")}
+            className="flex items-center gap-3"
+          >
             {data.logoUrl ? (
-              <img src={data.logoUrl} alt="logo" className="h-9 w-9 rounded-lg object-cover ring-1 ring-lime-400/40" />
+              <img
+                src={data.logoUrl}
+                alt="logo"
+                className="h-9 w-9 rounded-lg object-cover ring-1 ring-lime-400/40"
+              />
             ) : (
               <Gamepad2 className="h-8 w-8 text-lime-400" />
             )}
-            <span className="neon-green text-xl font-black tracking-wider text-lime-400 md:text-3xl" style={{ fontFamily: "Orbitron, sans-serif" }}>
+            <span
+              className="neon-green text-xl font-black tracking-wider text-lime-400 md:text-3xl"
+              style={{ fontFamily: "Orbitron, sans-serif" }}
+            >
               {data.logoText}
             </span>
           </button>
 
           <nav className="hidden items-center gap-7 md:flex">
             {navItems.map((item) => (
-              <button key={item.id} type="button" onClick={() => scrollToId(item.id)} className="text-lg font-semibold text-slate-300 transition hover:text-white">
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => scrollToId(item.id)}
+                className="text-lg font-semibold text-slate-300 transition hover:text-white"
+              >
                 {item.label}
               </button>
             ))}
           </nav>
 
           <div className="flex items-center gap-3">
-            <button type="button" onClick={() => scrollToId("notifications")} className="relative rounded-full p-2 text-slate-300 transition hover:bg-slate-900 hover:text-white">
+            <button
+              type="button"
+              onClick={() => scrollToId("notifications")}
+              className="relative rounded-full p-2 text-slate-300 transition hover:bg-slate-900 hover:text-white"
+            >
               <Bell className="h-6 w-6" />
               <span className="absolute right-1 top-1 h-2.5 w-2.5 rounded-full bg-lime-400 shadow-[0_0_15px_rgba(57,255,20,1)]" />
             </button>
-            <button type="button" onClick={() => setMobileMenu((value) => !value)} className="rounded-xl border border-slate-700 p-2 md:hidden">
+            <button
+              type="button"
+              onClick={() => setMobileMenu((value) => !value)}
+              className="rounded-xl border border-slate-700 p-2 md:hidden"
+            >
               <Menu className="h-5 w-5" />
             </button>
           </div>
@@ -703,13 +690,22 @@ function App() {
               {navItems.map((item) => {
                 const Icon = item.icon;
                 return (
-                  <button key={item.id} type="button" onClick={() => scrollToId(item.id)} className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-950/80 px-4 py-3 text-left text-slate-200">
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => scrollToId(item.id)}
+                    className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-950/80 px-4 py-3 text-left text-slate-200"
+                  >
                     <Icon className="h-5 w-5 text-lime-400" />
                     {item.label}
                   </button>
                 );
               })}
-              <button type="button" onClick={openAdmin} className="flex items-center gap-3 rounded-xl bg-lime-500 px-4 py-3 font-bold text-black">
+              <button
+                type="button"
+                onClick={openAdmin}
+                className="flex items-center gap-3 rounded-xl bg-lime-500 px-4 py-3 font-bold text-black"
+              >
                 <LayoutDashboard className="h-5 w-5" />
                 Open Admin Panel
               </button>
@@ -719,51 +715,104 @@ function App() {
       </header>
 
       <main>
-        <section id="home" className="cyber-bg hero-grid hero-lines relative overflow-hidden border-b border-slate-900">
+        <section
+          id="home"
+          className="cyber-bg hero-grid hero-lines relative overflow-hidden border-b border-slate-900"
+        >
           {data.bannerUrl ? (
             <div className="absolute inset-0 opacity-20">
-              <img src={data.bannerUrl} alt="banner" className="h-full w-full object-cover" />
+              <img
+                src={data.bannerUrl}
+                alt="banner"
+                className="h-full w-full object-cover"
+              />
             </div>
           ) : null}
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(0,0,0,0.15),rgba(0,0,0,0.82))]" />
           <div className="relative mx-auto max-w-7xl px-4 py-20 md:px-6 md:py-24">
             <div className="mx-auto max-w-4xl text-center">
-              <h1 className="leading-none uppercase" style={{ fontFamily: "Orbitron, sans-serif" }}>
-                <span className="neon-green block text-6xl font-black text-lime-400 md:text-[120px]">{data.heroTitle1}</span>
-                <span className="neon-cyan mt-2 block text-5xl font-black text-cyan-400 md:text-[88px]">{data.heroTitle2}</span>
+              <h1
+                className="leading-none uppercase"
+                style={{ fontFamily: "Orbitron, sans-serif" }}
+              >
+                <span className="neon-green block text-6xl font-black text-lime-400 md:text-[120px]">
+                  {data.heroTitle1}
+                </span>
+                <span className="neon-cyan mt-2 block text-5xl font-black text-cyan-400 md:text-[88px]">
+                  {data.heroTitle2}
+                </span>
               </h1>
-              <p className="mx-auto mt-6 max-w-3xl text-2xl text-slate-300 md:text-4xl">{data.heroSubtitle}</p>
+              <p className="mx-auto mt-6 max-w-3xl text-2xl text-slate-300 md:text-4xl">
+                {data.heroSubtitle}
+              </p>
               <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
-                <a href={data.youtubeLink || "#"} target="_blank" rel="noreferrer" className="inline-flex items-center gap-3 rounded-xl bg-lime-500 px-8 py-4 text-xl font-black uppercase tracking-wide text-black shadow-[0_0_30px_rgba(57,255,20,.25)] transition hover:scale-[1.02]" style={{ fontFamily: "Orbitron, sans-serif" }}>
+                <a
+                  href={data.youtubeLink || "#"}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-3 rounded-xl bg-lime-500 px-8 py-4 text-xl font-black uppercase tracking-wide text-black shadow-[0_0_30px_rgba(57,255,20,.25)] transition hover:scale-[1.02]"
+                  style={{ fontFamily: "Orbitron, sans-serif" }}
+                >
                   <Play className="h-6 w-6" /> Watch Now
                 </a>
-                <button type="button" onClick={() => scrollToId("brands")} className="inline-flex items-center gap-3 rounded-xl border border-cyan-400/60 bg-slate-950/70 px-8 py-4 text-xl font-black uppercase tracking-wide text-cyan-400 shadow-[0_0_25px_rgba(34,211,238,.12)] transition hover:scale-[1.02]" style={{ fontFamily: "Orbitron, sans-serif" }}>
+                <button
+                  type="button"
+                  onClick={() => scrollToId("brands")}
+                  className="inline-flex items-center gap-3 rounded-xl border border-cyan-400/60 bg-slate-950/70 px-8 py-4 text-xl font-black uppercase tracking-wide text-cyan-400 shadow-[0_0_25px_rgba(34,211,238,.12)] transition hover:scale-[1.02]"
+                  style={{ fontFamily: "Orbitron, sans-serif" }}
+                >
                   <Users className="h-6 w-6" /> Brand Connect
                 </button>
               </div>
             </div>
 
             <div className="mx-auto mt-14 grid max-w-3xl gap-4 md:grid-cols-3">
-              <StatCard icon={Users} value={data.subscribers} label="Subscribers" />
-              <StatCard icon={Video} value={data.totalVideos} label="Videos" />
+              <StatCard
+                icon={Users}
+                value={data.subscribers}
+                label="Subscribers"
+              />
+              <StatCard
+                icon={Video}
+                value={data.totalVideos}
+                label="Videos"
+              />
               <StatCard icon={Play} value={data.totalViews} label="Views" />
             </div>
           </div>
         </section>
 
-        <section id="videos" className="border-b border-slate-900 px-4 py-20 md:px-6">
+        <section
+          id="videos"
+          className="border-b border-slate-900 px-4 py-20 md:px-6"
+        >
           <div className="mx-auto max-w-7xl">
             <SectionTitle emoji="🎬" title="MY VIDEOS" />
-            <p className="mb-12 text-center text-2xl text-slate-400">Latest gaming content — watch, like & share!</p>
+            <p className="mb-12 text-center text-2xl text-slate-400">
+              Latest gaming content — watch, like & share!
+            </p>
+
             {data.videos.length === 0 ? (
-              <div className="text-center text-3xl text-slate-500">Videos coming soon! 🎮</div>
+              <div className="text-center text-3xl text-slate-500">
+                Videos coming soon! 🎮
+              </div>
             ) : (
               <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
                 {data.videos.map((video) => (
-                  <a key={video.id} href={video.videoUrl || "#"} target="_blank" rel="noreferrer" className="group overflow-hidden rounded-2xl border border-slate-800 bg-slate-950/70 transition hover:-translate-y-1 hover:border-lime-400/50 hover:shadow-[0_0_30px_rgba(57,255,20,.12)]">
+                  <a
+                    key={video.id}
+                    href={video.videoUrl || "#"}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="group overflow-hidden rounded-2xl border border-slate-800 bg-slate-950/70 transition hover:-translate-y-1 hover:border-lime-400/50 hover:shadow-[0_0_30px_rgba(57,255,20,.12)]"
+                  >
                     <div className="relative aspect-video overflow-hidden bg-slate-900">
                       {video.thumbnails?.find(Boolean) || video.thumbnail ? (
-                        <img src={video.thumbnails?.find(Boolean) || video.thumbnail} alt={video.title || "Video thumbnail"} className="h-full w-full object-cover transition duration-300 group-hover:scale-105" />
+                        <img
+                          src={video.thumbnails?.find(Boolean) || video.thumbnail}
+                          alt={video.title || "Video thumbnail"}
+                          className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+                        />
                       ) : (
                         <div className="flex h-full items-center justify-center text-slate-500">
                           <ImageIcon className="h-14 w-14" />
@@ -775,8 +824,12 @@ function App() {
                       </div>
                     </div>
                     <div className="space-y-2 p-5">
-                      <h3 className="text-2xl font-bold text-white">{video.title}</h3>
-                      <p className="min-h-[48px] text-lg text-slate-400">{video.description}</p>
+                      <h3 className="text-2xl font-bold text-white">
+                        {video.title}
+                      </h3>
+                      <p className="min-h-[48px] text-lg text-slate-400">
+                        {video.description}
+                      </p>
                       <div className="flex items-center justify-between gap-3 text-base text-slate-500">
                         <span>{video.views}</span>
                         <span>{video.uploadTime}</span>
@@ -789,21 +842,36 @@ function App() {
           </div>
         </section>
 
-        <section id="notifications" className="border-b border-slate-900 px-4 py-20 md:px-6">
+        <section
+          id="notifications"
+          className="border-b border-slate-900 px-4 py-20 md:px-6"
+        >
           <div className="mx-auto max-w-7xl">
             <SectionTitle emoji="🔔" title="NOTIFICATIONS" glow="cyan" />
             <div className="mx-auto grid max-w-4xl gap-4">
               {data.notifications.map((item) => (
-                <div key={item.id} className="rounded-2xl border border-slate-800 bg-slate-950/70 p-5 shadow-[0_0_20px_rgba(34,211,238,.05)]">
+                <div
+                  key={item.id}
+                  className="rounded-2xl border border-slate-800 bg-slate-950/70 p-5 shadow-[0_0_20px_rgba(34,211,238,.05)]"
+                >
                   <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                     <div>
-                      <h3 className="text-2xl font-bold text-white">{item.title}</h3>
+                      <h3 className="text-2xl font-bold text-white">
+                        {item.title}
+                      </h3>
                       <p className="text-lg text-slate-400">{item.text}</p>
                     </div>
                     <div className="flex items-center gap-3">
-                      <span className="rounded-full border border-cyan-400/25 bg-cyan-500/10 px-3 py-1 text-base text-cyan-300">{item.date}</span>
+                      <span className="rounded-full border border-cyan-400/25 bg-cyan-500/10 px-3 py-1 text-base text-cyan-300">
+                        {item.date}
+                      </span>
                       {item.link ? (
-                        <a href={item.link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-xl bg-cyan-500/15 px-4 py-2 text-cyan-300 hover:bg-cyan-500/25">
+                        <a
+                          href={item.link}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-2 rounded-xl bg-cyan-500/15 px-4 py-2 text-cyan-300 hover:bg-cyan-500/25"
+                        >
                           Open <ExternalLink className="h-4 w-4" />
                         </a>
                       ) : null}
@@ -815,21 +883,38 @@ function App() {
           </div>
         </section>
 
-        <section id="brands" className="border-b border-slate-900 px-4 py-20 md:px-6">
+        <section
+          id="brands"
+          className="border-b border-slate-900 px-4 py-20 md:px-6"
+        >
           <div className="mx-auto max-w-7xl">
             <SectionTitle emoji="🤝" title="BRAND CONNECT" glow="cyan" />
-            <p className="mb-12 text-center text-2xl text-slate-400">Collaborate with top gaming brands & earn!</p>
+            <p className="mb-12 text-center text-2xl text-slate-400">
+              Collaborate with top gaming brands & earn!
+            </p>
             <div className="grid gap-6 md:grid-cols-3">
               {data.brands.map((item) => (
-                <div key={item.id} className="rounded-2xl border border-slate-700 bg-slate-950/70 p-8 text-center shadow-[0_0_20px_rgba(57,255,20,.06)]">
+                <div
+                  key={item.id}
+                  className="rounded-2xl border border-slate-700 bg-slate-950/70 p-8 text-center shadow-[0_0_20px_rgba(57,255,20,.06)]"
+                >
                   <BrandIcon type={item.icon} />
-                  <h3 className="text-3xl font-bold text-white">{item.title}</h3>
-                  <p className="mx-auto mt-3 max-w-xs text-xl text-slate-400">{item.text}</p>
+                  <h3 className="text-3xl font-bold text-white">
+                    {item.title}
+                  </h3>
+                  <p className="mx-auto mt-3 max-w-xs text-xl text-slate-400">
+                    {item.text}
+                  </p>
                 </div>
               ))}
             </div>
             <div className="mt-10 text-center">
-              <button type="button" onClick={openBrandForm} className="inline-flex items-center gap-3 rounded-xl bg-lime-500 px-8 py-4 text-xl font-black uppercase tracking-wide text-black shadow-[0_0_30px_rgba(57,255,20,.25)]" style={{ fontFamily: "Orbitron, sans-serif" }}>
+              <button
+                type="button"
+                onClick={openBrandForm}
+                className="inline-flex items-center gap-3 rounded-xl bg-lime-500 px-8 py-4 text-xl font-black uppercase tracking-wide text-black shadow-[0_0_30px_rgba(57,255,20,.25)]"
+                style={{ fontFamily: "Orbitron, sans-serif" }}
+              >
                 <Mail className="h-6 w-6" /> Contact For Brand Deals
               </button>
             </div>
@@ -841,25 +926,75 @@ function App() {
             <SectionTitle emoji="📩" title="CONTACT" />
             <div className="grid gap-6 lg:grid-cols-2">
               <div className="rounded-3xl border border-slate-800 bg-slate-950/70 p-8">
-                <h3 className="mb-6 text-3xl font-bold text-white">Get in touch</h3>
+                <h3 className="mb-6 text-3xl font-bold text-white">
+                  Get in touch
+                </h3>
                 <div className="space-y-4 text-xl text-slate-300">
-                  <a href={`mailto:${data.contactEmail}`} className="flex items-center gap-3 hover:text-lime-400"><Mail className="h-5 w-5" /> {data.contactEmail}</a>
-                  <a href={`tel:${data.contactPhone}`} className="flex items-center gap-3 hover:text-lime-400"><Phone className="h-5 w-5" /> {data.contactPhone}</a>
-                  <a href={data.youtubeLink || "#"} target="_blank" rel="noreferrer" className="flex items-center gap-3 hover:text-red-400"><SocialIcon kind="youtube" /> YouTube Channel</a>
-                  <a href={data.instagram || "#"} target="_blank" rel="noreferrer" className="flex items-center gap-3 hover:text-pink-400"><SocialIcon kind="instagram" /> Instagram</a>
-                  <a href={data.facebook || "#"} target="_blank" rel="noreferrer" className="flex items-center gap-3 hover:text-blue-400"><SocialIcon kind="facebook" /> Facebook</a>
-                  <a href={data.telegram || "#"} target="_blank" rel="noreferrer" className="flex items-center gap-3 hover:text-cyan-400"><SocialIcon kind="telegram" /> Telegram</a>
+                  <a
+                    href={`mailto:${data.contactEmail}`}
+                    className="flex items-center gap-3 hover:text-lime-400"
+                  >
+                    <Mail className="h-5 w-5" /> {data.contactEmail}
+                  </a>
+                  <a
+                    href={`tel:${data.contactPhone}`}
+                    className="flex items-center gap-3 hover:text-lime-400"
+                  >
+                    <Phone className="h-5 w-5" /> {data.contactPhone}
+                  </a>
+                  <a
+                    href={data.youtubeLink || "#"}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-3 hover:text-red-400"
+                  >
+                    <SocialIcon kind="youtube" /> YouTube Channel
+                  </a>
+                  <a
+                    href={data.instagram || "#"}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-3 hover:text-pink-400"
+                  >
+                    <SocialIcon kind="instagram" /> Instagram
+                  </a>
+                  <a
+                    href={data.facebook || "#"}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-3 hover:text-blue-400"
+                  >
+                    <SocialIcon kind="facebook" /> Facebook
+                  </a>
+                  <a
+                    href={data.telegram || "#"}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-3 hover:text-cyan-400"
+                  >
+                    <SocialIcon kind="telegram" /> Telegram
+                  </a>
                 </div>
               </div>
+
               <div className="rounded-3xl border border-slate-800 bg-slate-950/70 p-8">
-                <h3 className="mb-6 text-3xl font-bold text-white">Quick Links</h3>
+                <h3 className="mb-6 text-3xl font-bold text-white">
+                  Quick Links
+                </h3>
                 <div className="grid gap-4 sm:grid-cols-2">
                   {navItems.map((item) => {
                     const Icon = item.icon;
                     return (
-                      <button key={item.id} type="button" onClick={() => scrollToId(item.id)} className="rounded-2xl border border-slate-700 bg-slate-900/80 p-5 text-left hover:border-lime-400/50">
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => scrollToId(item.id)}
+                        className="rounded-2xl border border-slate-700 bg-slate-900/80 p-5 text-left hover:border-lime-400/50"
+                      >
                         <Icon className="mb-3 h-6 w-6 text-lime-400" />
-                        <div className="text-2xl font-bold text-white">{item.label}</div>
+                        <div className="text-2xl font-bold text-white">
+                          {item.label}
+                        </div>
                       </button>
                     );
                   })}
@@ -872,18 +1007,33 @@ function App() {
 
       <footer className="border-t border-slate-900 bg-black/30 px-4 py-12 md:px-6">
         <div className="mx-auto max-w-7xl text-center">
-          <div className="neon-green inline-flex items-center gap-3 text-2xl font-black uppercase tracking-wider text-lime-400" style={{ fontFamily: "Orbitron, sans-serif" }}>
+          <div
+            className="neon-green inline-flex items-center gap-3 text-2xl font-black uppercase tracking-wider text-lime-400"
+            style={{ fontFamily: "Orbitron, sans-serif" }}
+          >
             <Gamepad2 className="h-6 w-6" /> {data.siteName}
           </div>
           <p className="mt-4 text-xl text-slate-400">🎮 {data.footerLine}</p>
-          <p className="mt-3 text-lg text-slate-500">© 2026 {data.siteName}. All rights reserved.</p>
+          <p className="mt-3 text-lg text-slate-500">
+            © 2026 {data.siteName}. All rights reserved.
+          </p>
           <div className="mt-4">
-            <button type="button" onClick={openAdmin} className="text-slate-500 hover:text-lime-400">Admin</button>
+            <button
+              type="button"
+              onClick={openAdmin}
+              className="text-slate-500 hover:text-lime-400"
+            >
+              Admin
+            </button>
           </div>
         </div>
       </footer>
 
-      <button type="button" onClick={openAdmin} className="fixed bottom-5 right-5 z-20 inline-flex items-center gap-3 rounded-2xl border border-lime-400/40 bg-slate-950/90 px-5 py-3 text-lime-400 shadow-[0_0_30px_rgba(57,255,20,.15)] backdrop-blur-md transition hover:scale-[1.02]">
+      <button
+        type="button"
+        onClick={openAdmin}
+        className="fixed bottom-5 right-5 z-20 inline-flex items-center gap-3 rounded-2xl border border-lime-400/40 bg-slate-950/90 px-5 py-3 text-lime-400 shadow-[0_0_30px_rgba(57,255,20,.15)] backdrop-blur-md transition hover:scale-[1.02]"
+      >
         <Settings className="h-5 w-5" />
         <span className="font-bold">Admin Panel</span>
       </button>
@@ -896,18 +1046,34 @@ function App() {
                 <div className="flex items-center gap-3">
                   <Settings className="h-6 w-6 text-lime-400" />
                   <div>
-                    <div className="text-xl font-black text-white md:text-2xl" style={{ fontFamily: "Orbitron, sans-serif" }}>Admin Panel</div>
-                    <div className="text-slate-400">Manage posts, thumbnails, links, stats and content</div>
+                    <div
+                      className="text-xl font-black text-white md:text-2xl"
+                      style={{ fontFamily: "Orbitron, sans-serif" }}
+                    >
+                      Admin Panel
+                    </div>
+                    <div className="text-slate-400">
+                      Manage posts, thumbnails, links, stats and content
+                    </div>
                   </div>
                 </div>
-                <button type="button" onClick={closeAdmin} className="rounded-xl border border-slate-700 p-2 hover:bg-slate-900"><X className="h-5 w-5" /></button>
+                <button
+                  type="button"
+                  onClick={closeAdmin}
+                  className="rounded-xl border border-slate-700 p-2 hover:bg-slate-900"
+                >
+                  <X className="h-5 w-5" />
+                </button>
               </div>
 
               {!loggedIn ? (
                 <div className="mx-auto max-w-md px-5 py-8 md:py-12">
                   <div className="rounded-[24px] border border-lime-400/50 bg-[#0b0f1a] p-6 shadow-[0_0_30px_rgba(57,255,20,.12)]">
                     <div className="mb-8 text-center">
-                      <div className="neon-green inline-flex items-center gap-2 text-3xl font-black uppercase text-lime-400" style={{ fontFamily: "Orbitron, sans-serif" }}>
+                      <div
+                        className="neon-green inline-flex items-center gap-2 text-3xl font-black uppercase text-lime-400"
+                        style={{ fontFamily: "Orbitron, sans-serif" }}
+                      >
                         <Gamepad2 className="h-7 w-7" />
                         {authMode === "login" ? "ADMIN LOGIN" : "ADMIN SIGN UP"}
                       </div>
@@ -915,22 +1081,94 @@ function App() {
 
                     {authMode === "login" ? (
                       <div className="space-y-4">
-                        <Input label="Admin Email" type="email" placeholder="Enter email" value={loginForm.email} onChange={(event) => setLoginForm((prev) => ({ ...prev, email: event.target.value }))} />
-                        <Input label="Password" type="password" placeholder="Enter password" value={loginForm.password} onChange={(event) => setLoginForm((prev) => ({ ...prev, password: event.target.value }))} />
-                        <button type="button" onClick={handleLogin} className="flex w-full items-center justify-center gap-2 rounded-xl bg-lime-600 px-4 py-3 text-lg font-black uppercase text-black hover:bg-lime-500" style={{ fontFamily: "Orbitron, sans-serif" }}>
-                          <LogIn className="h-5 w-5" /> Please Wait...
+                        <Input
+                          label="Admin Email"
+                          type="email"
+                          placeholder="Enter email"
+                          value={loginForm.email}
+                          onChange={(event) =>
+                            setLoginForm((prev) => ({
+                              ...prev,
+                              email: event.target.value,
+                            }))
+                          }
+                        />
+                        <Input
+                          label="Password"
+                          type="password"
+                          placeholder="Enter password"
+                          value={loginForm.password}
+                          onChange={(event) =>
+                            setLoginForm((prev) => ({
+                              ...prev,
+                              password: event.target.value,
+                            }))
+                          }
+                        />
+                        <button
+                          type="button"
+                          onClick={handleLogin}
+                          className="flex w-full items-center justify-center gap-2 rounded-xl bg-lime-600 px-4 py-3 text-lg font-black uppercase text-black hover:bg-lime-500"
+                          style={{ fontFamily: "Orbitron, sans-serif" }}
+                        >
+                          <LogIn className="h-5 w-5" /> Login
                         </button>
-                        <button type="button" onClick={() => setAuthMode("signup")} className="block w-full text-center text-lg text-slate-400 hover:text-white">Don&apos;t have account? Sign Up</button>
-                        <button type="button" onClick={closeAdmin} className="flex w-full items-center justify-center gap-2 text-lg text-slate-500 hover:text-lime-400"><ArrowLeft className="h-4 w-4" /> Back to Website</button>
+                        <button
+                          type="button"
+                          onClick={() => setAuthMode("signup")}
+                          className="block w-full text-center text-lg text-slate-400 hover:text-white"
+                        >
+                          Don&apos;t have account? Sign Up
+                        </button>
+                        <button
+                          type="button"
+                          onClick={closeAdmin}
+                          className="flex w-full items-center justify-center gap-2 text-lg text-slate-500 hover:text-lime-400"
+                        >
+                          <ArrowLeft className="h-4 w-4" /> Back to Website
+                        </button>
                       </div>
                     ) : (
                       <div className="space-y-4">
-                        <Input label="New Admin Email" type="email" placeholder="Enter email" value={signupForm.email} onChange={(event) => setSignupForm((prev) => ({ ...prev, email: event.target.value }))} />
-                        <Input label="New Password" type="password" placeholder="Create password" value={signupForm.password} onChange={(event) => setSignupForm((prev) => ({ ...prev, password: event.target.value }))} />
-                        <button type="button" onClick={handleSignup} className="flex w-full items-center justify-center gap-2 rounded-xl bg-lime-600 px-4 py-3 text-lg font-black uppercase text-black hover:bg-lime-500" style={{ fontFamily: "Orbitron, sans-serif" }}>
+                        <Input
+                          label="New Admin Email"
+                          type="email"
+                          placeholder="Enter email"
+                          value={signupForm.email}
+                          onChange={(event) =>
+                            setSignupForm((prev) => ({
+                              ...prev,
+                              email: event.target.value,
+                            }))
+                          }
+                        />
+                        <Input
+                          label="New Password"
+                          type="password"
+                          placeholder="Create password"
+                          value={signupForm.password}
+                          onChange={(event) =>
+                            setSignupForm((prev) => ({
+                              ...prev,
+                              password: event.target.value,
+                            }))
+                          }
+                        />
+                        <button
+                          type="button"
+                          onClick={handleSignup}
+                          className="flex w-full items-center justify-center gap-2 rounded-xl bg-lime-600 px-4 py-3 text-lg font-black uppercase text-black hover:bg-lime-500"
+                          style={{ fontFamily: "Orbitron, sans-serif" }}
+                        >
                           <Save className="h-5 w-5" /> Create Admin
                         </button>
-                        <button type="button" onClick={() => setAuthMode("login")} className="block w-full text-center text-lg text-slate-400 hover:text-white">Already have account? Login</button>
+                        <button
+                          type="button"
+                          onClick={() => setAuthMode("login")}
+                          className="block w-full text-center text-lg text-slate-400 hover:text-white"
+                        >
+                          Already have account? Login
+                        </button>
                       </div>
                     )}
                   </div>
@@ -943,72 +1181,322 @@ function App() {
                         const Icon = tab.icon;
                         const active = adminPage === tab.id;
                         return (
-                          <button key={tab.id} type="button" onClick={() => setAdminPage(tab.id)} className={`flex items-center gap-3 rounded-2xl px-4 py-3 text-left transition ${active ? "bg-lime-500 text-black" : "border border-slate-800 bg-slate-950/80 text-slate-300 hover:border-lime-400/30"}`}>
+                          <button
+                            key={tab.id}
+                            type="button"
+                            onClick={() => setAdminPage(tab.id)}
+                            className={`flex items-center gap-3 rounded-2xl px-4 py-3 text-left transition ${
+                              active
+                                ? "bg-lime-500 text-black"
+                                : "border border-slate-800 bg-slate-950/80 text-slate-300 hover:border-lime-400/30"
+                            }`}
+                          >
                             <Icon className="h-5 w-5" />
                             <span className="font-bold">{tab.label}</span>
                           </button>
                         );
                       })}
-                      <button type="button" onClick={logout} className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-left font-bold text-red-300 hover:bg-red-500/20">Logout</button>
+                      <button
+                        type="button"
+                        onClick={logout}
+                        className="rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-left font-bold text-red-300 hover:bg-red-500/20"
+                      >
+                        Logout
+                      </button>
                     </div>
                   </aside>
 
                   <div className="max-h-[80vh] overflow-y-auto p-4 md:p-6">
                     {adminPage === "settings" && (
                       <div>
-                        <h3 className="mb-6 text-4xl font-black text-white" style={{ fontFamily: "Orbitron, sans-serif" }}>⚙️ Site Settings</h3>
+                        <h3
+                          className="mb-6 text-4xl font-black text-white"
+                          style={{ fontFamily: "Orbitron, sans-serif" }}
+                        >
+                          ⚙️ Site Settings
+                        </h3>
+
                         <div className="grid gap-4 md:grid-cols-2">
-                          <Input label="Site Name" value={data.siteName} onChange={(event) => saveData((prev) => ({ ...prev, siteName: event.target.value }))} />
-                          <Input label="Logo Text" value={data.logoText} onChange={(event) => saveData((prev) => ({ ...prev, logoText: event.target.value }))} />
-                          <Input label="Hero Title 1" value={data.heroTitle1} onChange={(event) => saveData((prev) => ({ ...prev, heroTitle1: event.target.value }))} />
-                          <Input label="Hero Title 2" value={data.heroTitle2} onChange={(event) => saveData((prev) => ({ ...prev, heroTitle2: event.target.value }))} />
-                          <Input label="YouTube Channel Link" value={data.youtubeLink} onChange={(event) => saveData((prev) => ({ ...prev, youtubeLink: event.target.value }))} />
-                          <Input label="Brand Email" value={data.brandContactEmail} onChange={(event) => saveData((prev) => ({ ...prev, brandContactEmail: event.target.value }))} />
-                          <Input label="Contact Email" value={data.contactEmail} onChange={(event) => saveData((prev) => ({ ...prev, contactEmail: event.target.value }))} />
-                          <Input label="Phone Number" value={data.contactPhone} onChange={(event) => saveData((prev) => ({ ...prev, contactPhone: event.target.value }))} />
-                          <Input label="Instagram Link" value={data.instagram} onChange={(event) => saveData((prev) => ({ ...prev, instagram: event.target.value }))} />
-                          <Input label="Facebook Link" value={data.facebook} onChange={(event) => saveData((prev) => ({ ...prev, facebook: event.target.value }))} />
-                          <Input label="Telegram Link" value={data.telegram} onChange={(event) => saveData((prev) => ({ ...prev, telegram: event.target.value }))} />
-                          <Input label="Subscribers Count" value={data.subscribers} onChange={(event) => saveData((prev) => ({ ...prev, subscribers: event.target.value }))} />
-                          <Input label="Total Videos" value={data.totalVideos} onChange={(event) => saveData((prev) => ({ ...prev, totalVideos: event.target.value }))} />
-                          <Input label="Total Views" value={data.totalViews} onChange={(event) => saveData((prev) => ({ ...prev, totalViews: event.target.value }))} />
-                          <Input label="Admin Email" value={data.adminEmail} onChange={(event) => saveData((prev) => ({ ...prev, adminEmail: event.target.value }), "Admin email updated")} />
+                          <Input
+                            label="Site Name"
+                            value={data.siteName}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                siteName: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="Logo Text"
+                            value={data.logoText}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                logoText: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="Hero Title 1"
+                            value={data.heroTitle1}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                heroTitle1: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="Hero Title 2"
+                            value={data.heroTitle2}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                heroTitle2: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="YouTube Channel Link"
+                            value={data.youtubeLink}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                youtubeLink: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="Brand Email"
+                            value={data.brandContactEmail}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                brandContactEmail: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="Contact Email"
+                            value={data.contactEmail}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                contactEmail: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="Phone Number"
+                            value={data.contactPhone}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                contactPhone: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="Instagram Link"
+                            value={data.instagram}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                instagram: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="Facebook Link"
+                            value={data.facebook}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                facebook: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="Telegram Link"
+                            value={data.telegram}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                telegram: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="Subscribers Count"
+                            value={data.subscribers}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                subscribers: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="Total Videos"
+                            value={data.totalVideos}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                totalVideos: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="Total Views"
+                            value={data.totalViews}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                totalViews: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="Admin Email"
+                            value={data.adminEmail}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                adminEmail: e.target.value,
+                              }))
+                            }
+                          />
                         </div>
+
                         <div className="mt-4 grid gap-4">
-                          <Textarea label="Tagline / Bio" value={data.tagline} onChange={(event) => saveData((prev) => ({ ...prev, tagline: event.target.value }))} />
-                          <Textarea label="Hero Subtitle" value={data.heroSubtitle} onChange={(event) => saveData((prev) => ({ ...prev, heroSubtitle: event.target.value }))} />
-                          <Textarea label="Footer Line" value={data.footerLine} onChange={(event) => saveData((prev) => ({ ...prev, footerLine: event.target.value }))} />
+                          <Textarea
+                            label="Tagline / Bio"
+                            value={data.tagline}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                tagline: e.target.value,
+                              }))
+                            }
+                          />
+                          <Textarea
+                            label="Hero Subtitle"
+                            value={data.heroSubtitle}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                heroSubtitle: e.target.value,
+                              }))
+                            }
+                          />
+                          <Textarea
+                            label="Footer Line"
+                            value={data.footerLine}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                footerLine: e.target.value,
+                              }))
+                            }
+                          />
                         </div>
 
                         <div className="mt-6 grid gap-6 md:grid-cols-2">
                           <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4">
                             <div className="mb-3 flex items-center justify-between gap-3">
-                              <div className="text-xl font-bold text-white">Logo Upload</div>
-                              <button type="button" onClick={() => clearStoredImage("logoUrl", "Logo deleted")} className="rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-red-300 hover:bg-red-500/20">
+                              <div className="text-xl font-bold text-white">
+                                Logo Upload
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  clearStoredImage("logoUrl", "Logo deleted")
+                                }
+                                className="rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-red-300 hover:bg-red-500/20"
+                              >
                                 <Trash2 className="h-4 w-4" />
                               </button>
                             </div>
-                            <input type="file" accept="image/*" onChange={(event) => handleImageUpload(event.target.files?.[0], "Logo updated", (base64) => (prev) => ({ ...prev, logoUrl: base64 }))} className="block w-full text-sm text-slate-400" />
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) =>
+                                handleImageUpload(
+                                  e.target.files?.[0],
+                                  "Logo updated",
+                                  (url) => (prev) => ({ ...prev, logoUrl: url }),
+                                  "site-assets/logo"
+                                )
+                              }
+                              className="block w-full text-sm text-slate-400"
+                            />
                             {data.logoUrl ? (
-                              <img src={data.logoUrl} alt="logo preview" className="mt-4 h-20 w-20 rounded-xl object-cover" />
+                              <img
+                                src={data.logoUrl}
+                                alt="logo preview"
+                                className="mt-4 h-20 w-20 rounded-xl object-cover"
+                              />
                             ) : (
-                              <div className="mt-4 flex h-20 w-20 items-center justify-center rounded-xl border border-dashed border-slate-700 text-xs text-slate-500">No logo</div>
+                              <div className="mt-4 flex h-20 w-20 items-center justify-center rounded-xl border border-dashed border-slate-700 text-xs text-slate-500">
+                                No logo
+                              </div>
                             )}
                           </div>
+
                           <div className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4">
                             <div className="mb-3 flex items-center justify-between gap-3">
-                              <div className="text-xl font-bold text-white">Banner Upload</div>
-                              <button type="button" onClick={() => clearStoredImage("bannerUrl", "Banner deleted")} className="rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-red-300 hover:bg-red-500/20">
+                              <div className="text-xl font-bold text-white">
+                                Banner Upload
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  clearStoredImage("bannerUrl", "Banner deleted")
+                                }
+                                className="rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-red-300 hover:bg-red-500/20"
+                              >
                                 <Trash2 className="h-4 w-4" />
                               </button>
                             </div>
-                            <input type="file" accept="image/*" onChange={(event) => handleImageUpload(event.target.files?.[0], "Banner updated", (base64) => (prev) => ({ ...prev, bannerUrl: base64 }))} className="block w-full text-sm text-slate-400" />
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) =>
+                                handleImageUpload(
+                                  e.target.files?.[0],
+                                  "Banner updated",
+                                  (url) => (prev) => ({
+                                    ...prev,
+                                    bannerUrl: url,
+                                  }),
+                                  "site-assets/banner"
+                                )
+                              }
+                              className="block w-full text-sm text-slate-400"
+                            />
                             {data.bannerUrl ? (
-                              <img src={data.bannerUrl} alt="banner preview" className="mt-4 h-24 w-full rounded-xl object-cover" />
+                              <img
+                                src={data.bannerUrl}
+                                alt="banner preview"
+                                className="mt-4 h-24 w-full rounded-xl object-cover"
+                              />
                             ) : (
-                              <div className="mt-4 flex h-24 w-full items-center justify-center rounded-xl border border-dashed border-slate-700 text-sm text-slate-500">No banner</div>
+                              <div className="mt-4 flex h-24 w-full items-center justify-center rounded-xl border border-dashed border-slate-700 text-sm text-slate-500">
+                                No banner
+                              </div>
                             )}
                           </div>
+                        </div>
+
+                        <div className="mt-6">
+                          <button
+                            type="button"
+                            onClick={() => saveData(data, "All settings saved")}
+                            className="rounded-xl bg-lime-500 px-6 py-3 font-bold text-black"
+                          >
+                            {saving ? "Saving..." : "Save Settings"}
+                          </button>
                         </div>
                       </div>
                     )}
@@ -1016,66 +1504,256 @@ function App() {
                     {adminPage === "videos" && (
                       <div>
                         <div className="mb-6 flex items-center justify-between gap-3">
-                          <h3 className="text-4xl font-black text-white" style={{ fontFamily: "Orbitron, sans-serif" }}>🎬 Video Posts</h3>
-                          <button type="button" onClick={() => saveData((prev) => ({ ...prev, videos: [{ id: createId(), title: "New Video", description: "Add video details", thumbnail: "", thumbnails: ["", "", ""], videoUrl: "", views: "0 views", uploadTime: "Now" }, ...prev.videos] }), "Video card added")} className="inline-flex items-center gap-2 rounded-xl bg-lime-500 px-4 py-3 font-bold text-black">
+                          <h3
+                            className="text-4xl font-black text-white"
+                            style={{ fontFamily: "Orbitron, sans-serif" }}
+                          >
+                            🎬 Video Posts
+                          </h3>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              saveData(
+                                (prev) => ({
+                                  ...prev,
+                                  videos: [
+                                    {
+                                      id: createId(),
+                                      title: "New Video",
+                                      description: "Add video details",
+                                      thumbnail: "",
+                                      thumbnails: ["", "", ""],
+                                      videoUrl: "",
+                                      views: "0 views",
+                                      uploadTime: "Now",
+                                    },
+                                    ...prev.videos,
+                                  ],
+                                }),
+                                "Video card added"
+                              )
+                            }
+                            className="inline-flex items-center gap-2 rounded-xl bg-lime-500 px-4 py-3 font-bold text-black"
+                          >
                             <Plus className="h-4 w-4" /> Add Video
                           </button>
                         </div>
+
                         <div className="space-y-4">
                           {data.videos.map((video) => (
-                            <div key={video.id} className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4">
+                            <div
+                              key={video.id}
+                              className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4"
+                            >
                               <div className="mb-4 flex items-center justify-between gap-4">
-                                <div className="text-2xl font-bold text-white">{video.title || "Untitled Video"}</div>
-                                <button type="button" onClick={() => saveData((prev) => ({ ...prev, videos: prev.videos.filter((item) => item.id !== video.id) }), "Video removed")} className="rounded-xl border border-red-500/30 bg-red-500/10 p-2 text-red-300">
+                                <div className="text-2xl font-bold text-white">
+                                  {video.title || "Untitled Video"}
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    saveData(
+                                      (prev) => ({
+                                        ...prev,
+                                        videos: prev.videos.filter(
+                                          (item) => item.id !== video.id
+                                        ),
+                                      }),
+                                      "Video removed"
+                                    )
+                                  }
+                                  className="rounded-xl border border-red-500/30 bg-red-500/10 p-2 text-red-300"
+                                >
                                   <Trash2 className="h-4 w-4" />
                                 </button>
                               </div>
+
                               <div className="grid gap-4 md:grid-cols-2">
-                                <Input label="Video Title" value={video.title} onChange={(event) => updateVideo(video.id, { title: event.target.value })} />
-                                <Input label="YouTube / Video Link" value={video.videoUrl} onChange={(event) => updateVideo(video.id, { videoUrl: event.target.value })} />
-                                <Input label="Views Text" value={video.views} onChange={(event) => updateVideo(video.id, { views: event.target.value })} />
-                                <Input label="Upload Time" value={video.uploadTime} onChange={(event) => updateVideo(video.id, { uploadTime: event.target.value })} />
+                                <Input
+                                  label="Video Title"
+                                  value={video.title}
+                                  onChange={(e) =>
+                                    setData((prev) => ({
+                                      ...prev,
+                                      videos: prev.videos.map((v) =>
+                                        v.id === video.id
+                                          ? { ...v, title: e.target.value }
+                                          : v
+                                      ),
+                                    }))
+                                  }
+                                />
+                                <Input
+                                  label="YouTube / Video Link"
+                                  value={video.videoUrl}
+                                  onChange={(e) =>
+                                    setData((prev) => ({
+                                      ...prev,
+                                      videos: prev.videos.map((v) =>
+                                        v.id === video.id
+                                          ? { ...v, videoUrl: e.target.value }
+                                          : v
+                                      ),
+                                    }))
+                                  }
+                                />
+                                <Input
+                                  label="Views Text"
+                                  value={video.views}
+                                  onChange={(e) =>
+                                    setData((prev) => ({
+                                      ...prev,
+                                      videos: prev.videos.map((v) =>
+                                        v.id === video.id
+                                          ? { ...v, views: e.target.value }
+                                          : v
+                                      ),
+                                    }))
+                                  }
+                                />
+                                <Input
+                                  label="Upload Time"
+                                  value={video.uploadTime}
+                                  onChange={(e) =>
+                                    setData((prev) => ({
+                                      ...prev,
+                                      videos: prev.videos.map((v) =>
+                                        v.id === video.id
+                                          ? { ...v, uploadTime: e.target.value }
+                                          : v
+                                      ),
+                                    }))
+                                  }
+                                />
                               </div>
+
                               <div className="mt-4">
-                                <Textarea label="Description" value={video.description} onChange={(event) => updateVideo(video.id, { description: event.target.value })} />
+                                <Textarea
+                                  label="Description"
+                                  value={video.description}
+                                  onChange={(e) =>
+                                    setData((prev) => ({
+                                      ...prev,
+                                      videos: prev.videos.map((v) =>
+                                        v.id === video.id
+                                          ? {
+                                              ...v,
+                                              description: e.target.value,
+                                            }
+                                          : v
+                                      ),
+                                    }))
+                                  }
+                                />
                               </div>
+
                               <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
-                                <div className="mb-3 text-lg font-semibold text-white">Thumbnail Upload Sections</div>
+                                <div className="mb-3 text-lg font-semibold text-white">
+                                  Thumbnail Upload Sections
+                                </div>
+
                                 <div className="grid gap-4 md:grid-cols-3">
                                   {[0, 1, 2].map((thumbIndex) => {
-                                    const thumbValue = video.thumbnails?.[thumbIndex] || "";
+                                    const thumbValue =
+                                      video.thumbnails?.[thumbIndex] || "";
                                     return (
-                                      <div key={`${video.id}-thumb-${thumbIndex}`} className="rounded-2xl border border-slate-700 bg-slate-950/80 p-3">
+                                      <div
+                                        key={`${video.id}-thumb-${thumbIndex}`}
+                                        className="rounded-2xl border border-slate-700 bg-slate-950/80 p-3"
+                                      >
                                         <div className="mb-2 flex items-center justify-between gap-2">
-                                          <div className="text-sm font-bold text-slate-300">Thumbnail {thumbIndex + 1}</div>
-                                          <button type="button" onClick={() => {
-                                            const nextThumbs = [...(video.thumbnails || ["", "", ""]), "", ""].slice(0, 3);
-                                            nextThumbs[thumbIndex] = "";
-                                            updateVideo(video.id, { thumbnails: nextThumbs, thumbnail: nextThumbs.find(Boolean) || "" });
-                                          }} className="rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-red-300 hover:bg-red-500/20">
+                                          <div className="text-sm font-bold text-slate-300">
+                                            Thumbnail {thumbIndex + 1}
+                                          </div>
+                                          <button
+                                            type="button"
+                                            onClick={async () => {
+                                              const nextThumbs = [
+                                                ...(video.thumbnails || [
+                                                  "",
+                                                  "",
+                                                  "",
+                                                ]),
+                                                "",
+                                                "",
+                                              ].slice(0, 3);
+                                              nextThumbs[thumbIndex] = "";
+                                              await updateVideo(video.id, {
+                                                thumbnails: nextThumbs,
+                                                thumbnail:
+                                                  nextThumbs.find(Boolean) || "",
+                                              });
+                                            }}
+                                            className="rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-red-300 hover:bg-red-500/20"
+                                          >
                                             <Trash2 className="h-4 w-4" />
                                           </button>
                                         </div>
-                                        <input type="file" accept="image/*" onChange={(event) => handleImageUpload(event.target.files?.[0], `Thumbnail ${thumbIndex + 1} uploaded`, (base64) => (prev) => ({
-                                          ...prev,
-                                          videos: prev.videos.map((item) => {
-                                            if (item.id !== video.id) {
-                                              return item;
-                                            }
-                                            const nextThumbs = [...(item.thumbnails || ["", "", ""]), "", ""].slice(0, 3);
-                                            nextThumbs[thumbIndex] = base64;
-                                            return { ...item, thumbnails: nextThumbs, thumbnail: nextThumbs.find(Boolean) || "" };
-                                          }),
-                                        }))} className="block w-full text-sm text-slate-400" />
+
+                                        <input
+                                          type="file"
+                                          accept="image/*"
+                                          onChange={(e) =>
+                                            handleImageUpload(
+                                              e.target.files?.[0],
+                                              `Thumbnail ${thumbIndex + 1} uploaded`,
+                                              (url) => (prev) => ({
+                                                ...prev,
+                                                videos: prev.videos.map(
+                                                  (item) => {
+                                                    if (item.id !== video.id)
+                                                      return item;
+                                                    const nextThumbs = [
+                                                      ...(item.thumbnails || [
+                                                        "",
+                                                        "",
+                                                        "",
+                                                      ]),
+                                                      "",
+                                                      "",
+                                                    ].slice(0, 3);
+                                                    nextThumbs[thumbIndex] = url;
+                                                    return {
+                                                      ...item,
+                                                      thumbnails: nextThumbs,
+                                                      thumbnail:
+                                                        nextThumbs.find(Boolean) ||
+                                                        "",
+                                                    };
+                                                  }
+                                                ),
+                                              }),
+                                              "site-assets/videos"
+                                            )
+                                          }
+                                          className="block w-full text-sm text-slate-400"
+                                        />
+
                                         {thumbValue ? (
-                                          <img src={thumbValue} alt={`thumb-${thumbIndex + 1}`} className="mt-3 aspect-video w-full rounded-xl object-cover" />
+                                          <img
+                                            src={thumbValue}
+                                            alt={`thumb-${thumbIndex + 1}`}
+                                            className="mt-3 aspect-video w-full rounded-xl object-cover"
+                                          />
                                         ) : (
-                                          <div className="mt-3 flex aspect-video items-center justify-center rounded-xl border border-dashed border-slate-700 text-sm text-slate-500">No thumbnail</div>
+                                          <div className="mt-3 flex aspect-video items-center justify-center rounded-xl border border-dashed border-slate-700 text-sm text-slate-500">
+                                            No thumbnail
+                                          </div>
                                         )}
                                       </div>
                                     );
                                   })}
                                 </div>
+                              </div>
+
+                              <div className="mt-4">
+                                <button
+                                  type="button"
+                                  onClick={() => saveData(data, "Videos saved")}
+                                  className="rounded-xl bg-lime-500 px-5 py-3 font-bold text-black"
+                                >
+                                  {saving ? "Saving..." : "Save Video Changes"}
+                                </button>
                               </div>
                             </div>
                           ))}
@@ -1086,27 +1764,158 @@ function App() {
                     {adminPage === "notifications" && (
                       <div>
                         <div className="mb-6 flex items-center justify-between gap-3">
-                          <h3 className="text-4xl font-black text-white" style={{ fontFamily: "Orbitron, sans-serif" }}>🔔 Notifications</h3>
-                          <button type="button" onClick={() => saveData((prev) => ({ ...prev, notifications: [{ id: createId(), title: "New Notification", text: "Write update here", link: "", date: "Today" }, ...prev.notifications] }), "Notification added")} className="inline-flex items-center gap-2 rounded-xl bg-lime-500 px-4 py-3 font-bold text-black">
+                          <h3
+                            className="text-4xl font-black text-white"
+                            style={{ fontFamily: "Orbitron, sans-serif" }}
+                          >
+                            🔔 Notifications
+                          </h3>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              saveData(
+                                (prev) => ({
+                                  ...prev,
+                                  notifications: [
+                                    {
+                                      id: createId(),
+                                      title: "New Notification",
+                                      text: "Write update here",
+                                      link: "",
+                                      date: "Today",
+                                    },
+                                    ...prev.notifications,
+                                  ],
+                                }),
+                                "Notification added"
+                              )
+                            }
+                            className="inline-flex items-center gap-2 rounded-xl bg-lime-500 px-4 py-3 font-bold text-black"
+                          >
                             <Plus className="h-4 w-4" /> Add Notification
                           </button>
                         </div>
+
                         <div className="space-y-4">
                           {data.notifications.map((item) => (
-                            <div key={item.id} className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4">
+                            <div
+                              key={item.id}
+                              className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4"
+                            >
                               <div className="mb-4 flex items-center justify-between gap-4">
-                                <div className="text-2xl font-bold text-white">{item.title || "Notification"}</div>
-                                <button type="button" onClick={() => saveData((prev) => ({ ...prev, notifications: prev.notifications.filter((entry) => entry.id !== item.id) }), "Notification removed")} className="rounded-xl border border-red-500/30 bg-red-500/10 p-2 text-red-300">
+                                <div className="text-2xl font-bold text-white">
+                                  {item.title || "Notification"}
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    saveData(
+                                      (prev) => ({
+                                        ...prev,
+                                        notifications:
+                                          prev.notifications.filter(
+                                            (entry) => entry.id !== item.id
+                                          ),
+                                      }),
+                                      "Notification removed"
+                                    )
+                                  }
+                                  className="rounded-xl border border-red-500/30 bg-red-500/10 p-2 text-red-300"
+                                >
                                   <Trash2 className="h-4 w-4" />
                                 </button>
                               </div>
+
                               <div className="grid gap-4 md:grid-cols-2">
-                                <Input label="Title" value={item.title} onChange={(event) => updateNotification(item.id, { title: event.target.value })} />
-                                <Input label="Date / Badge" value={item.date} onChange={(event) => updateNotification(item.id, { date: event.target.value })} />
+                                <Input
+                                  label="Title"
+                                  value={item.title}
+                                  onChange={(e) =>
+                                    setData((prev) => ({
+                                      ...prev,
+                                      notifications: prev.notifications.map(
+                                        (n) =>
+                                          n.id === item.id
+                                            ? {
+                                                ...n,
+                                                title: e.target.value,
+                                              }
+                                            : n
+                                      ),
+                                    }))
+                                  }
+                                />
+                                <Input
+                                  label="Date / Badge"
+                                  value={item.date}
+                                  onChange={(e) =>
+                                    setData((prev) => ({
+                                      ...prev,
+                                      notifications: prev.notifications.map(
+                                        (n) =>
+                                          n.id === item.id
+                                            ? {
+                                                ...n,
+                                                date: e.target.value,
+                                              }
+                                            : n
+                                      ),
+                                    }))
+                                  }
+                                />
                               </div>
+
                               <div className="mt-4 grid gap-4">
-                                <Textarea label="Text" value={item.text} onChange={(event) => updateNotification(item.id, { text: event.target.value })} />
-                                <Input label="Link (optional)" value={item.link} onChange={(event) => updateNotification(item.id, { link: event.target.value })} />
+                                <Textarea
+                                  label="Text"
+                                  value={item.text}
+                                  onChange={(e) =>
+                                    setData((prev) => ({
+                                      ...prev,
+                                      notifications: prev.notifications.map(
+                                        (n) =>
+                                          n.id === item.id
+                                            ? {
+                                                ...n,
+                                                text: e.target.value,
+                                              }
+                                            : n
+                                      ),
+                                    }))
+                                  }
+                                />
+                                <Input
+                                  label="Link (optional)"
+                                  value={item.link}
+                                  onChange={(e) =>
+                                    setData((prev) => ({
+                                      ...prev,
+                                      notifications: prev.notifications.map(
+                                        (n) =>
+                                          n.id === item.id
+                                            ? {
+                                                ...n,
+                                                link: e.target.value,
+                                              }
+                                            : n
+                                      ),
+                                    }))
+                                  }
+                                />
+                              </div>
+
+                              <div className="mt-4">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    saveData(data, "Notifications saved")
+                                  }
+                                  className="rounded-xl bg-lime-500 px-5 py-3 font-bold text-black"
+                                >
+                                  {saving
+                                    ? "Saving..."
+                                    : "Save Notification Changes"}
+                                </button>
                               </div>
                             </div>
                           ))}
@@ -1117,33 +1926,140 @@ function App() {
                     {adminPage === "brands" && (
                       <div>
                         <div className="mb-6 flex items-center justify-between gap-3">
-                          <h3 className="text-4xl font-black text-white" style={{ fontFamily: "Orbitron, sans-serif" }}>🤝 Brand Cards</h3>
-                          <button type="button" onClick={() => saveData((prev) => ({ ...prev, brands: [...prev.brands, { id: createId(), icon: "growth", title: "New Brand Benefit", text: "Write details here" }] }), "Brand card added")} className="inline-flex items-center gap-2 rounded-xl bg-lime-500 px-4 py-3 font-bold text-black">
+                          <h3
+                            className="text-4xl font-black text-white"
+                            style={{ fontFamily: "Orbitron, sans-serif" }}
+                          >
+                            🤝 Brand Cards
+                          </h3>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              saveData(
+                                (prev) => ({
+                                  ...prev,
+                                  brands: [
+                                    ...prev.brands,
+                                    {
+                                      id: createId(),
+                                      icon: "growth",
+                                      title: "New Brand Benefit",
+                                      text: "Write details here",
+                                    },
+                                  ],
+                                }),
+                                "Brand card added"
+                              )
+                            }
+                            className="inline-flex items-center gap-2 rounded-xl bg-lime-500 px-4 py-3 font-bold text-black"
+                          >
                             <Plus className="h-4 w-4" /> Add Card
                           </button>
                         </div>
+
                         <div className="space-y-4">
                           {data.brands.map((brand) => (
-                            <div key={brand.id} className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4">
+                            <div
+                              key={brand.id}
+                              className="rounded-2xl border border-slate-800 bg-slate-950/80 p-4"
+                            >
                               <div className="mb-4 flex items-center justify-between gap-4">
-                                <div className="text-2xl font-bold text-white">{brand.title || "Brand card"}</div>
-                                <button type="button" onClick={() => saveData((prev) => ({ ...prev, brands: prev.brands.filter((entry) => entry.id !== brand.id) }), "Brand card removed")} className="rounded-xl border border-red-500/30 bg-red-500/10 p-2 text-red-300">
+                                <div className="text-2xl font-bold text-white">
+                                  {brand.title || "Brand card"}
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    saveData(
+                                      (prev) => ({
+                                        ...prev,
+                                        brands: prev.brands.filter(
+                                          (entry) => entry.id !== brand.id
+                                        ),
+                                      }),
+                                      "Brand card removed"
+                                    )
+                                  }
+                                  className="rounded-xl border border-red-500/30 bg-red-500/10 p-2 text-red-300"
+                                >
                                   <Trash2 className="h-4 w-4" />
                                 </button>
                               </div>
+
                               <div className="grid gap-4 md:grid-cols-2">
-                                <Input label="Card Title" value={brand.title} onChange={(event) => updateBrand(brand.id, { title: event.target.value })} />
+                                <Input
+                                  label="Card Title"
+                                  value={brand.title}
+                                  onChange={(e) =>
+                                    setData((prev) => ({
+                                      ...prev,
+                                      brands: prev.brands.map((b) =>
+                                        b.id === brand.id
+                                          ? {
+                                              ...b,
+                                              title: e.target.value,
+                                            }
+                                          : b
+                                      ),
+                                    }))
+                                  }
+                                />
                                 <label className="block space-y-2">
-                                  <span className="text-sm font-semibold text-slate-300 md:text-base">Icon Type</span>
-                                  <select value={brand.icon} onChange={(event) => updateBrand(brand.id, { icon: event.target.value })} className="w-full rounded-xl border border-slate-700 bg-slate-900/90 px-4 py-3 text-white outline-none">
+                                  <span className="text-sm font-semibold text-slate-300 md:text-base">
+                                    Icon Type
+                                  </span>
+                                  <select
+                                    value={brand.icon}
+                                    onChange={(e) =>
+                                      setData((prev) => ({
+                                        ...prev,
+                                        brands: prev.brands.map((b) =>
+                                          b.id === brand.id
+                                            ? {
+                                                ...b,
+                                                icon: e.target.value,
+                                              }
+                                            : b
+                                        ),
+                                      }))
+                                    }
+                                    className="w-full rounded-xl border border-slate-700 bg-slate-900/90 px-4 py-3 text-white outline-none"
+                                  >
                                     <option value="growth">Growth</option>
                                     <option value="verified">Verified</option>
                                     <option value="premium">Premium</option>
                                   </select>
                                 </label>
                               </div>
+
                               <div className="mt-4">
-                                <Textarea label="Card Text" value={brand.text} onChange={(event) => updateBrand(brand.id, { text: event.target.value })} />
+                                <Textarea
+                                  label="Card Text"
+                                  value={brand.text}
+                                  onChange={(e) =>
+                                    setData((prev) => ({
+                                      ...prev,
+                                      brands: prev.brands.map((b) =>
+                                        b.id === brand.id
+                                          ? {
+                                              ...b,
+                                              text: e.target.value,
+                                            }
+                                          : b
+                                      ),
+                                    }))
+                                  }
+                                />
+                              </div>
+
+                              <div className="mt-4">
+                                <button
+                                  type="button"
+                                  onClick={() => saveData(data, "Brand cards saved")}
+                                  className="rounded-xl bg-lime-500 px-5 py-3 font-bold text-black"
+                                >
+                                  {saving ? "Saving..." : "Save Brand Changes"}
+                                </button>
                               </div>
                             </div>
                           ))}
@@ -1153,17 +2069,90 @@ function App() {
 
                     {adminPage === "contact" && (
                       <div>
-                        <h3 className="mb-6 text-4xl font-black text-white" style={{ fontFamily: "Orbitron, sans-serif" }}>📩 Contact Links</h3>
+                        <h3
+                          className="mb-6 text-4xl font-black text-white"
+                          style={{ fontFamily: "Orbitron, sans-serif" }}
+                        >
+                          📩 Contact Links
+                        </h3>
+
                         <div className="grid gap-4 md:grid-cols-2">
-                          <Input label="Contact Email" value={data.contactEmail} onChange={(event) => saveData((prev) => ({ ...prev, contactEmail: event.target.value }), "Contact updated")} />
-                          <Input label="Contact Phone" value={data.contactPhone} onChange={(event) => saveData((prev) => ({ ...prev, contactPhone: event.target.value }), "Contact updated")} />
-                          <Input label="YouTube Link" value={data.youtubeLink} onChange={(event) => saveData((prev) => ({ ...prev, youtubeLink: event.target.value }), "Contact updated")} />
-                          <Input label="Instagram Link" value={data.instagram} onChange={(event) => saveData((prev) => ({ ...prev, instagram: event.target.value }), "Contact updated")} />
-                          <Input label="Facebook Link" value={data.facebook} onChange={(event) => saveData((prev) => ({ ...prev, facebook: event.target.value }), "Contact updated")} />
-                          <Input label="Telegram Link" value={data.telegram} onChange={(event) => saveData((prev) => ({ ...prev, telegram: event.target.value }), "Contact updated")} />
+                          <Input
+                            label="Contact Email"
+                            value={data.contactEmail}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                contactEmail: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="Contact Phone"
+                            value={data.contactPhone}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                contactPhone: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="YouTube Link"
+                            value={data.youtubeLink}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                youtubeLink: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="Instagram Link"
+                            value={data.instagram}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                instagram: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="Facebook Link"
+                            value={data.facebook}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                facebook: e.target.value,
+                              }))
+                            }
+                          />
+                          <Input
+                            label="Telegram Link"
+                            value={data.telegram}
+                            onChange={(e) =>
+                              setData((prev) => ({
+                                ...prev,
+                                telegram: e.target.value,
+                              }))
+                            }
+                          />
                         </div>
+
                         <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950/80 p-5 text-slate-400">
-                          Tip: yaha jo links aur details bharoge woh website me instantly update ho jayenge. Static website hone ke baad bhi yeh demo admin panel IndexedDB aur localStorage me data save karta hai.
+                          Ab jo bhi links aur details yaha save karoge woh
+                          Supabase me save hongi, isliye sab users ko same
+                          updated data dikhega.
+                        </div>
+
+                        <div className="mt-4">
+                          <button
+                            type="button"
+                            onClick={() => saveData(data, "Contact updated")}
+                            className="rounded-xl bg-lime-500 px-5 py-3 font-bold text-black"
+                          >
+                            {saving ? "Saving..." : "Save Contact Changes"}
+                          </button>
                         </div>
                       </div>
                     )}
@@ -1181,33 +2170,34 @@ function App() {
             <div className="w-full max-w-3xl rounded-[28px] border border-slate-700 bg-[#08101d] p-6 shadow-[0_0_35px_rgba(34,211,238,.14)] md:p-8">
               <div className="mb-6 flex items-center justify-between gap-4">
                 <div>
-                  <h3 className="text-3xl font-black text-white" style={{ fontFamily: "Orbitron, sans-serif" }}>
+                  <h3
+                    className="text-3xl font-black text-white"
+                    style={{ fontFamily: "Orbitron, sans-serif" }}
+                  >
                     Brand Deal Contact Form
                   </h3>
-                  <p className="mt-2 text-slate-400">Fill the form and send your enquiry.</p>
+                  <p className="mt-2 text-slate-400">
+                    Fill the form and send your enquiry.
+                  </p>
                 </div>
-                <button type="button" onClick={closeBrandForm} className="rounded-xl border border-slate-700 p-2 hover:bg-slate-900">
+                <button
+                  type="button"
+                  onClick={closeBrandForm}
+                  className="rounded-xl border border-slate-700 p-2 hover:bg-slate-900"
+                >
                   <X className="h-5 w-5" />
                 </button>
               </div>
 
-              <iframe name="brand-form-target" title="brand-form-target" className="hidden" />
               <form
-                action={`https://formsubmit.co/${BRAND_FORM_EMAIL}`}
-                method="POST"
-                target="brand-form-target"
                 onSubmit={handleBrandSubmit}
                 className="grid gap-4 md:grid-cols-2"
               >
-                <input type="hidden" name="_subject" value="New Brand Deal Inquiry" />
-                <input type="hidden" name="_captcha" value="false" />
-                <input type="hidden" name="_template" value="table" />
-
                 <Input
                   label="Your Name"
                   name="name"
                   value={brandForm.name}
-                  onChange={(event) => handleBrandFormChange("name", event.target.value)}
+                  onChange={(e) => handleBrandFormChange("name", e.target.value)}
                   placeholder="Enter your name"
                   required
                 />
@@ -1216,7 +2206,7 @@ function App() {
                   type="email"
                   name="email"
                   value={brandForm.email}
-                  onChange={(event) => handleBrandFormChange("email", event.target.value)}
+                  onChange={(e) => handleBrandFormChange("email", e.target.value)}
                   placeholder="Enter your email"
                   required
                 />
@@ -1224,7 +2214,7 @@ function App() {
                   label="Brand Name"
                   name="brand"
                   value={brandForm.brand}
-                  onChange={(event) => handleBrandFormChange("brand", event.target.value)}
+                  onChange={(e) => handleBrandFormChange("brand", e.target.value)}
                   placeholder="Enter brand/company name"
                   required
                 />
@@ -1232,7 +2222,7 @@ function App() {
                   label="Contact Number"
                   name="phone"
                   value={brandForm.phone}
-                  onChange={(event) => handleBrandFormChange("phone", event.target.value)}
+                  onChange={(e) => handleBrandFormChange("phone", e.target.value)}
                   placeholder="Enter contact number"
                   required
                 />
@@ -1241,14 +2231,22 @@ function App() {
                     label="Message"
                     name="message"
                     value={brandForm.message}
-                    onChange={(event) => handleBrandFormChange("message", event.target.value)}
+                    onChange={(e) =>
+                      handleBrandFormChange("message", e.target.value)
+                    }
                     placeholder="Tell me about your brand deal or collaboration"
                     required
                   />
                 </div>
                 <div className="md:col-span-2 text-center">
-                  <button type="submit" className="inline-flex items-center gap-3 rounded-xl bg-cyan-500 px-8 py-4 text-lg font-black uppercase tracking-wide text-black shadow-[0_0_30px_rgba(34,211,238,.2)] hover:scale-[1.02]" style={{ fontFamily: "Orbitron, sans-serif" }}>
-                    <Send className="h-5 w-5" /> Send Enquiry
+                  <button
+                    type="submit"
+                    disabled={submittingBrand}
+                    className="inline-flex items-center gap-3 rounded-xl bg-cyan-500 px-8 py-4 text-lg font-black uppercase tracking-wide text-black shadow-[0_0_30px_rgba(34,211,238,.2)] hover:scale-[1.02] disabled:opacity-70"
+                    style={{ fontFamily: "Orbitron, sans-serif" }}
+                  >
+                    <Send className="h-5 w-5" />
+                    {submittingBrand ? "Sending..." : "Send Enquiry"}
                   </button>
                 </div>
               </form>
