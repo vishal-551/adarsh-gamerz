@@ -6,6 +6,7 @@ import {
   submitBrandEnquiry,
 } from "./services/siteService";
 import { uploadImage } from "./services/uploadService";
+import emailjs from "@emailjs/browser";
 import {
   createUserWithEmailAndPassword,
   onAuthStateChanged,
@@ -43,6 +44,32 @@ import {
 } from "lucide-react";
 
 const ALLOWED_ADMIN_EMAIL = "vishaldas571725@gmail.com";
+
+async function sendBrandEnquiryEmail(formData) {
+  const serviceId = import.meta.env.VITE_EMAILJS_SERVICE_ID;
+  const templateId = import.meta.env.VITE_EMAILJS_TEMPLATE_ID;
+  const publicKey = import.meta.env.VITE_EMAILJS_PUBLIC_KEY;
+
+  if (!serviceId || !templateId || !publicKey) {
+    throw new Error("EmailJS env missing");
+  }
+
+  return emailjs.send(
+    serviceId,
+    templateId,
+    {
+      admin_email: "vishaldas571725@gmail.com",
+      from_name: formData.name,
+      from_email: formData.email,
+      brand_name: formData.brand,
+      phone: formData.phone,
+      message: formData.message,
+    },
+    {
+      publicKey,
+    }
+  );
+}
 
 function createId() {
   if (typeof globalThis !== "undefined" && globalThis.crypto?.randomUUID) {
@@ -576,13 +603,16 @@ function App() {
     try {
       setSubmittingBrand(true);
 
-      await submitBrandEnquiry({
+      const payload = {
         name: brandForm.name,
         email: brandForm.email,
         brand: brandForm.brand,
         phone: brandForm.phone,
         message: brandForm.message,
-      });
+      };
+
+      await submitBrandEnquiry(payload);
+      await sendBrandEnquiryEmail(payload);
 
       setToast("Enquiry sent successfully");
       setBrandForm({
@@ -2055,7 +2085,9 @@ function App() {
                               <div className="mt-4">
                                 <button
                                   type="button"
-                                  onClick={() => saveData(data, "Brand cards saved")}
+                                  onClick={() =>
+                                    saveData(data, "Brand cards saved")
+                                  }
                                   className="rounded-xl bg-lime-500 px-5 py-3 font-bold text-black"
                                 >
                                   {saving ? "Saving..." : "Save Brand Changes"}
